@@ -99,7 +99,7 @@ def check():
     return None
 
 
-def _spawn_swap_helper(target, temp, old):
+def _swap_and_relaunch(target, temp):
     exe_name = os.path.basename(target)
     pid = os.getpid()
     script = (
@@ -111,7 +111,6 @@ def _spawn_swap_helper(target, temp, old):
         "  goto wait\r\n"
         ")\r\n"
         f'move /y "{temp}" "{target}" >NUL 2>&1\r\n'
-        f'if exist "{old}" del "{old}" >NUL 2>&1\r\n'
         f'start "" "{target}"\r\n'
         'del "%~f0"\r\n'
     )
@@ -121,43 +120,47 @@ def _spawn_swap_helper(target, temp, old):
     subprocess.Popen(["cmd", "/c", bat], close_fds=True, creationflags=0x00000008)
 
 
-def download_and_install(url):
-    target, running = update_target()
-    if not target:
-        return False, "не удалось определить файл программы для обновления", False
-    temp = target + ".new"
-    old = target + ".old"
-    try:
-        context = _ssl_context()
-        request = urllib.request.Request(url, headers={"User-Agent": "ServiceCom"})
-        with urllib.request.urlopen(request, timeout=120, context=context) as response:
-            data = response.read()
-        if len(data) < 100000:
-            return False, "загруженный файл повреждён", False
-        with open(temp, "wb") as handle:
-            handle.write(data)
-        if not running:
-            os.replace(temp, target)
-            return True, target, False
+class UpdateDownloader(QThread):
+    progress = pyqtSignal(int)
+    done = pyqtSignal(bool, str)
+
+    def __init__(self, url, parent=None):
+        super().__init__(parent)
+        self.url = url
+
+    def run(self):
+        target, _ = update_target()
+        if not target:
+            self.done.emit(False, "не удалось определить файл программы для обновления")
+            return
+        temp = target + ".new"
         try:
-            if os.path.exists(old):
-                os.remove(old)
-        except OSError:
-            pass
-        try:
-            os.rename(target, old)
-            os.rename(temp, target)
-            return True, target, False
-        except OSError:
-            _spawn_swap_helper(target, temp, old)
-            return True, "restart", True
-    except Exception as exc:
-        try:
-            if os.path.exists(temp):
-                os.remove(temp)
-        except OSError:
-            pass
-        return False, str(exc), False
+            context = _ssl_context()
+            request = urllib.request.Request(self.url, headers={"User-Agent": "ServiceCom"})
+            with urllib.request.urlopen(request, timeout=120, context=context) as response:
+                total = int(response.getheader("Content-Length") or 0)
+                got = 0
+                with open(temp, "wb") as handle:
+                    while True:
+                        chunk = response.read(262144)
+                        if not chunk:
+                            break
+                        handle.write(chunk)
+                        got += len(chunk)
+                        if total:
+                            self.progress.emit(min(100, int(got * 100 / total)))
+            if got < 100000:
+                raise ValueError("загруженный файл повреждён")
+            self.progress.emit(100)
+            _swap_and_relaunch(target, temp)
+            self.done.emit(True, target)
+        except Exception as exc:
+            try:
+                if os.path.exists(temp):
+                    os.remove(temp)
+            except OSError:
+                pass
+            self.done.emit(False, str(exc))
 
 
 class UpdateChecker(QThread):
@@ -165,15 +168,3 @@ class UpdateChecker(QThread):
 
     def run(self):
         self.result.emit(check())
-
-
-class UpdateDownloader(QThread):
-    done = pyqtSignal(bool, str, bool)
-
-    def __init__(self, url, parent=None):
-        super().__init__(parent)
-        self.url = url
-
-    def run(self):
-        ok, message, restart = download_and_install(self.url)
-        self.done.emit(ok, message, restart)

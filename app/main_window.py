@@ -2,8 +2,8 @@ from PyQt6.QtCore import QEvent, Qt, QTimer
 from PyQt6.QtGui import QColor, QPixmap
 from PyQt6.QtWidgets import (QApplication, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
                              QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
-                             QPlainTextEdit, QPushButton, QStackedWidget, QTextEdit,
-                             QVBoxLayout, QWidget)
+                             QPlainTextEdit, QProgressDialog, QPushButton, QStackedWidget,
+                             QTextEdit, QVBoxLayout, QWidget)
 
 from app import config
 from app.report import ReportPage
@@ -66,42 +66,51 @@ class MainWindow(QMainWindow):
         self.update_checker.result.connect(self.on_update_found)
         self.update_checker.start()
         self.update_downloader = None
+        self.update_dialog = None
 
     def on_update_found(self, info):
         if not info:
             return
+        if not can_update():
+            notes = f"\n\nЧто нового:\n{info['notes']}" if info.get("notes") else ""
+            QMessageBox.information(
+                self, "Доступно обновление",
+                f"Доступна новая версия {info['version']} (у вас {VERSION}).\n"
+                "Автообновление доступно только для собранной программы (.exe) — "
+                f"скачайте её со страницы релизов на GitHub.{notes}")
+            return
         notes = f"\n\nЧто нового:\n{info['notes']}" if info.get("notes") else ""
         answer = QMessageBox.question(
             self, "Доступно обновление",
-            f"Доступна новая версия {info['version']} (у вас {VERSION}).\n"
-            f"Обновить программу прямо сейчас?{notes}",
+            f"Доступна новая версия {info['version']} (у вас {VERSION}).\n\n"
+            "Программа скачает обновление, затем автоматически закроется и "
+            f"запустится заново уже обновлённой.\n\nОбновить сейчас?{notes}",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if answer != QMessageBox.StandardButton.Yes:
             return
-        if not can_update():
-            QMessageBox.information(
-                self, "Обновление",
-                "Обновление доступно только для собранной программы (.exe). "
-                f"Скачайте новую версию ({info['version']}) со страницы релизов на GitHub.")
-            return
+        self.update_dialog = QProgressDialog("Скачивание обновления...", None, 0, 100, self)
+        self.update_dialog.setWindowTitle("Обновление")
+        self.update_dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
+        self.update_dialog.setCancelButton(None)
+        self.update_dialog.setMinimumWidth(360)
+        self.update_dialog.setValue(0)
+        self.update_dialog.show()
         self.update_downloader = UpdateDownloader(info["url"], self)
+        self.update_downloader.progress.connect(self.update_dialog.setValue)
         self.update_downloader.done.connect(self.on_update_done)
         self.update_downloader.start()
 
-    def on_update_done(self, ok, message, restart):
+    def on_update_done(self, ok, message):
+        if self.update_dialog is not None:
+            self.update_dialog.close()
+            self.update_dialog = None
         if not ok:
             QMessageBox.warning(self, "Обновление не удалось", f"Не удалось обновить:\n{message}")
             return
-        if restart:
-            QMessageBox.information(
-                self, "Обновление",
-                "Программа сейчас закроется, обновится и запустится заново автоматически.")
-            QApplication.instance().quit()
-        else:
-            QMessageBox.information(
-                self, "Обновление завершено",
-                "Программа обновлена. Новая версия вступит в силу при следующем запуске.\n\n"
-                "Закройте программу и запустите заново.")
+        QMessageBox.information(
+            self, "Обновление загружено",
+            "Программа сейчас закроется и через пару секунд откроется заново — уже обновлённой.")
+        QApplication.instance().quit()
 
     def _build_header(self):
         header = QWidget()
