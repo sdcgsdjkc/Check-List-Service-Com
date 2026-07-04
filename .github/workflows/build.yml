@@ -28,7 +28,6 @@ jobs:
           pyinstaller --onefile --windowed --clean --noconfirm
           --name "SCAA" --uac-admin
           --icon "icon.ico"
-          --splash "logo.png"
           --add-data "logo.png;."
           --add-data "lib/LibreHardwareMonitorLib.dll;."
           --add-data "lib/HidSharp.dll;."

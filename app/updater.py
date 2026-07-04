@@ -7,7 +7,7 @@ import urllib.request
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
-VERSION = "1.1.1"
+VERSION = "1.1.2"
 
 GITHUB_REPO = "sdcgsdjkc/Check-List-Service-Com"
 
