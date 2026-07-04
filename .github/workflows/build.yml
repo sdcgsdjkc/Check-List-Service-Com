@@ -27,6 +27,7 @@ jobs:
         run: >
           pyinstaller --onefile --windowed --clean --noconfirm
           --name "ServiceCom_Diag" --uac-admin
+          --splash "logo.png"
           --add-data "logo.png;."
           --add-data "lib/LibreHardwareMonitorLib.dll;."
           --add-data "lib/HidSharp.dll;."
@@ -35,6 +36,7 @@ jobs:
           --collect-all psutil
           --collect-all pythonnet
           --collect-all clr_loader
+          --collect-all certifi
           main.py
 
       - name: Upload EXE to release

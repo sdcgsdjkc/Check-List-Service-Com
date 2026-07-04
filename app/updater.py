@@ -7,7 +7,7 @@ import urllib.request
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 
 GITHUB_REPO = "sdcgsdjkc/Check-List-Service-Com"
 
@@ -18,6 +18,17 @@ def _configured():
 
 def is_configured():
     return _configured()
+
+
+def _ssl_context():
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        try:
+            return ssl.create_default_context()
+        except Exception:
+            return None
 
 
 def _api_url():
@@ -45,11 +56,11 @@ def check():
     if not _configured():
         return None
     try:
-        context = ssl.create_default_context()
+        context = _ssl_context()
         request = urllib.request.Request(
             _api_url(), headers={"User-Agent": "ServiceCom",
                                  "Accept": "application/vnd.github+json"})
-        with urllib.request.urlopen(request, timeout=6, context=context) as response:
+        with urllib.request.urlopen(request, timeout=8, context=context) as response:
             data = json.loads(response.read().decode("utf-8"))
         tag = str(data.get("tag_name", "")).strip()
         asset = next((item for item in data.get("assets", [])
@@ -68,7 +79,7 @@ def download_and_install(url):
         return False, "флешка (исходный диск) недоступна для записи"
     temp = target + ".new"
     try:
-        context = ssl.create_default_context()
+        context = _ssl_context()
         request = urllib.request.Request(url, headers={"User-Agent": "ServiceCom"})
         with urllib.request.urlopen(request, timeout=120, context=context) as response:
             data = response.read()

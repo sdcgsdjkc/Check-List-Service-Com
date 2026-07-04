@@ -9,6 +9,27 @@ for _var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
              "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
     os.environ.setdefault(_var, "1")
 
+_mutex_handle = []
+
+
+def acquire_single_instance():
+    if sys.platform != "win32":
+        return True
+    import ctypes
+    handle = ctypes.windll.kernel32.CreateMutexW(None, False, "Global\\ServiceComDiag_SingleInstance")
+    if not handle or ctypes.windll.kernel32.GetLastError() == 183:
+        return False
+    _mutex_handle.append(handle)
+    return True
+
+
+def close_splash():
+    try:
+        import pyi_splash
+        pyi_splash.close()
+    except Exception:
+        pass
+
 
 def relaunch_from_temp():
     if sys.platform != "win32" or not getattr(sys, "frozen", False):
@@ -24,7 +45,8 @@ def relaunch_from_temp():
     os.makedirs(target_dir, exist_ok=True)
     target = os.path.join(target_dir, os.path.basename(exe))
     try:
-        shutil.copy2(exe, target)
+        if not (os.path.exists(target) and os.path.getsize(target) == os.path.getsize(exe)):
+            shutil.copy2(exe, target)
     except OSError:
         return
     env = dict(os.environ)
@@ -61,8 +83,11 @@ def main():
             pass
 
     sys.excepthook = handle_exception
+    if not acquire_single_instance():
+        close_splash()
+        sys.exit(0)
     app = QApplication(sys.argv)
-    app.setApplicationName("Сервис • Com — Диагностика ноутбуков")
+    app.setApplicationName("Сервис • Com — Диагностика устройств")
     theme_name = config.load().get("theme", "dark")
     if theme_name not in ("dark", "light"):
         theme_name = "dark"
@@ -70,6 +95,7 @@ def main():
     window = MainWindow(theme_name)
     app.installEventFilter(window)
     window.show()
+    close_splash()
     sys.exit(app.exec())
 
 
