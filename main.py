@@ -70,6 +70,11 @@ def main():
     from app import config
     from app.main_window import MainWindow
     from app.theme import stylesheet
+    from app.updater import cleanup_old
+    try:
+        cleanup_old()
+    except Exception:
+        pass
     try:
         os.chdir(tempfile.gettempdir())
     except OSError:

@@ -7,7 +7,7 @@ import urllib.request
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
-VERSION = "1.1.3"
+VERSION = "1.1.4"
 
 GITHUB_REPO = "sdcgsdjkc/Check-List-Service-Com"
 
@@ -52,6 +52,30 @@ def origin_exe():
     return None
 
 
+def update_target():
+    flash = origin_exe()
+    if flash:
+        return flash, False
+    if getattr(sys, "frozen", False):
+        return os.path.abspath(sys.executable), True
+    return None, False
+
+
+def can_update():
+    return update_target()[0] is not None
+
+
+def cleanup_old():
+    for base in filter(None, [origin_exe(),
+                              os.path.abspath(sys.executable) if getattr(sys, "frozen", False) else None]):
+        try:
+            old = base + ".old"
+            if os.path.exists(old):
+                os.remove(old)
+        except OSError:
+            pass
+
+
 def check():
     if not _configured():
         return None
@@ -74,10 +98,11 @@ def check():
 
 
 def download_and_install(url):
-    target = origin_exe()
+    target, running = update_target()
     if not target:
-        return False, "флешка (исходный диск) недоступна для записи"
+        return False, "не удалось определить файл программы для обновления"
     temp = target + ".new"
+    old = target + ".old"
     try:
         context = _ssl_context()
         request = urllib.request.Request(url, headers={"User-Agent": "ServiceCom"})
@@ -87,7 +112,16 @@ def download_and_install(url):
             return False, "загруженный файл повреждён"
         with open(temp, "wb") as handle:
             handle.write(data)
-        os.replace(temp, target)
+        if running:
+            try:
+                if os.path.exists(old):
+                    os.remove(old)
+            except OSError:
+                pass
+            os.rename(target, old)
+            os.rename(temp, target)
+        else:
+            os.replace(temp, target)
         return True, target
     except Exception as exc:
         try:

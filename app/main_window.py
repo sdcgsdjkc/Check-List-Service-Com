@@ -12,7 +12,7 @@ from app.sysinfo import SpecsWorker
 from app.tests import PAGE_CLASSES
 from app.tests.base import BaseTestPage
 from app.theme import colors, stylesheet
-from app.updater import VERSION, UpdateChecker, UpdateDownloader, is_configured, origin_exe
+from app.updater import VERSION, UpdateChecker, UpdateDownloader, can_update, is_configured
 
 
 class MainWindow(QMainWindow):
@@ -74,17 +74,15 @@ class MainWindow(QMainWindow):
         answer = QMessageBox.question(
             self, "Доступно обновление",
             f"Доступна новая версия {info['version']} (у вас {VERSION}).\n"
-            f"Обновить файл программы на флешке прямо сейчас?{notes}",
+            f"Обновить программу прямо сейчас?{notes}",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if answer != QMessageBox.StandardButton.Yes:
             return
-        if origin_exe() is None:
+        if not can_update():
             QMessageBox.information(
                 self, "Обновление",
-                "Автообновление работает только при запуске программы с флешки "
-                "(тогда файл на флешке можно перезаписать).\n\n"
-                "Сейчас программа запущена не с флешки, поэтому скачайте новую версию "
-                f"вручную со страницы релизов на GitHub (версия {info['version']}).")
+                "Обновление доступно только для собранной программы (.exe). "
+                f"Скачайте новую версию ({info['version']}) со страницы релизов на GitHub.")
             return
         self.update_downloader = UpdateDownloader(info["url"], self)
         self.update_downloader.done.connect(self.on_update_done)
@@ -94,8 +92,8 @@ class MainWindow(QMainWindow):
         if ok:
             QMessageBox.information(
                 self, "Обновление завершено",
-                "Файл на флешке обновлён. Изменения вступят в силу при следующем запуске "
-                f"программы с флешки.\n\n{message}")
+                "Программа обновлена. Новая версия вступит в силу при следующем запуске.\n\n"
+                "Закройте программу и запустите заново.")
         else:
             QMessageBox.warning(self, "Обновление не удалось", f"Не удалось обновить:\n{message}")
 
