@@ -96,7 +96,7 @@ def main():
         sys.exit(0)
     splash_text("Запуск интерфейса...")
     app = QApplication(sys.argv)
-    app.setApplicationName("Сервис • Com — Диагностика устройств")
+    app.setApplicationName("SCAA — Service Com Auto Analyze")
     theme_name = config.load().get("theme", "dark")
     if theme_name not in ("dark", "light"):
         theme_name = "dark"

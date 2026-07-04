@@ -19,7 +19,7 @@ class MainWindow(QMainWindow):
     def __init__(self, theme_name="dark"):
         super().__init__()
         self.theme_name = theme_name if theme_name in ("dark", "light") else "dark"
-        self.setWindowTitle("Сервис • Com — Комплексная диагностика устройств")
+        self.setWindowTitle("SCAA — Service Com Auto Analyze")
         self.resize(1200, 760)
         self.specs = {"model": "определяется...", "cpu": "определяется...",
                       "ram": "...", "device_type": "…", "battery_wear": "...", "battery_note": ""}
@@ -111,9 +111,15 @@ class MainWindow(QMainWindow):
             logo.setPixmap(pixmap.scaledToHeight(
                 40, Qt.TransformationMode.SmoothTransformation))
         layout.addWidget(logo)
-        sub = QLabel("Комплексная диагностика ПК, ноутбуков и моноблоков")
+        brand_box = QVBoxLayout()
+        brand_box.setSpacing(0)
+        brand = QLabel("SCAA")
+        brand.setObjectName("brandLabel")
+        sub = QLabel("Service Com Auto Analyze · диагностика ПК, ноутбуков и моноблоков")
         sub.setObjectName("brandSub")
-        layout.addWidget(sub)
+        brand_box.addWidget(brand)
+        brand_box.addWidget(sub)
+        layout.addLayout(brand_box)
         layout.addStretch(1)
         grid = QGridLayout()
         grid.setHorizontalSpacing(18)
@@ -317,8 +323,9 @@ class MainWindow(QMainWindow):
     def show_about(self):
         QMessageBox.about(
             self, "О программе",
-            "<h3>Сервис • Com</h3>"
-            f"<p>Комплексная диагностика ПК, ноутбуков и моноблоков.<br>Версия {VERSION} (Portable)</p>"
+            "<h3>SCAA</h3>"
+            "<p><b>Service Com Auto Analyze</b><br>"
+            f"Комплексная диагностика ПК, ноутбуков и моноблоков.<br>Версия {VERSION} (Portable)</p>"
             "<p>Разработчик: <b>Владислав Артемьев</b></p>"
             "<p>© 2026 Сервисный центр «Сервис • Com»</p>")
 

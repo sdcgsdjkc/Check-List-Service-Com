@@ -26,7 +26,7 @@ jobs:
       - name: Build EXE
         run: >
           pyinstaller --onefile --windowed --clean --noconfirm
-          --name "ServiceCom_Diag" --uac-admin
+          --name "SCAA" --uac-admin
           --icon "icon.ico"
           --splash "logo.png"
           --add-data "logo.png;."
@@ -44,11 +44,11 @@ jobs:
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/ServiceCom_Diag.exe
+          files: dist/SCAA.exe
 
       - name: Upload EXE as artifact
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
-          name: ServiceCom_Diag
-          path: dist/ServiceCom_Diag.exe
+          name: SCAA
+          path: dist/SCAA.exe

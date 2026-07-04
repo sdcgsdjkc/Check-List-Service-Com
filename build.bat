@@ -19,8 +19,8 @@ if exist "lib\LibreHardwareMonitorLib.dll" (
 )
 if exist "lib\HidSharp.dll" set "ADDHID=--add-data "lib\HidSharp.dll;.""
 
-pyinstaller --onefile --windowed --clean --noconfirm --name "ServiceCom_Diag" --uac-admin --icon "icon.ico" --splash "logo.png" --add-data "logo.png;." !ADDLHM! !ADDHID! --collect-all PyQt6 --collect-all numpy --collect-all psutil --collect-all pythonnet --collect-all clr_loader --collect-all certifi main.py
+pyinstaller --onefile --windowed --clean --noconfirm --name "SCAA" --uac-admin --icon "icon.ico" --splash "logo.png" --add-data "logo.png;." !ADDLHM! !ADDHID! --collect-all PyQt6 --collect-all numpy --collect-all psutil --collect-all pythonnet --collect-all clr_loader --collect-all certifi main.py
 
 echo.
-echo Готово: dist\ServiceCom_Diag.exe
+echo Готово: dist\SCAA.exe
 pause
