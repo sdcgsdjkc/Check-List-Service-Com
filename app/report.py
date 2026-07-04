@@ -4,6 +4,8 @@ import os
 import re
 
 import psutil
+
+from app.norms import GRADE_COLORS
 from PyQt6.QtWidgets import (QApplication, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
                              QMessageBox, QPushButton, QTextEdit, QVBoxLayout, QWidget)
 
@@ -104,12 +106,20 @@ def build_report_html(specs, results, order, c):
         summary = item.get("summary")
         summary_html = (f"&nbsp;&nbsp;<span style='color:{c['report_muted']};font-size:9pt;'>"
                         f"{esc(summary)}</span>" if summary else "")
+        grade = item.get("grade") or ""
+        dot_color = c[GRADE_COLORS.get(grade, "notrun")]
+        dot = f"<span style='color:{dot_color};'>●</span>" if grade else "<span style='color:transparent;'>●</span>"
         parts.append(
-            f"<tr><td width='5%' valign='top' style='color:{c['report_num']};'>{number:02d}</td>"
+            f"<tr><td width='3%' valign='top'>{dot}</td>"
+            f"<td width='4%' valign='top' style='color:{c['report_num']};'>{number:02d}</td>"
             f"<td valign='top' style='color:{c['report_text']};'>{esc(item['title'])}{summary_html}</td>"
             f"<td width='16%' valign='top' align='right' style='color:{color};font-weight:700;'>"
             f"{esc(item['result'])}</td></tr>")
     parts.append("</table>")
+    parts.append(f"<p style='color:{c['report_muted']};font-size:8pt;margin-top:6px;'>"
+                 f"<span style='color:{c['pass']};'>●</span> норма&nbsp;&nbsp;"
+                 f"<span style='color:{c['skip']};'>●</span> внимание&nbsp;&nbsp;"
+                 f"<span style='color:{c['fail']};'>●</span> критично</p>")
     parts.append("</div>")
     return "".join(parts)
 

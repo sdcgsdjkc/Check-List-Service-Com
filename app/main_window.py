@@ -1,4 +1,4 @@
-from PyQt6.QtCore import QEvent, Qt
+from PyQt6.QtCore import QEvent, Qt, QTimer
 from PyQt6.QtGui import QColor, QPixmap
 from PyQt6.QtWidgets import (QApplication, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
                              QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
@@ -44,9 +44,9 @@ class MainWindow(QMainWindow):
             page.completed.connect(self.on_completed)
             self.pages.append(page)
             self.stack.addWidget(page)
-            self.results.append({"title": page_class.title, "result": "Не выполнялся", "details": ""})
+            self.results.append({"title": page_class.title, "result": "Не выполнялся",
+                                 "details": "", "summary": "", "grade": ""})
             QListWidgetItem(f"{index + 1}. {page_class.title}", self.checklist)
-            self.results[index]["summary"] = ""
         self.report_page = ReportPage(colors(self.theme_name))
         self.stack.addWidget(self.report_page)
         QListWidgetItem("Итоговый отчет", self.checklist)
@@ -55,6 +55,8 @@ class MainWindow(QMainWindow):
         root.addLayout(body, 1)
         root.addLayout(self._build_footer())
         self.current_row = -1
+        self.auto_running = False
+        self.auto_queue = []
         self.checklist.currentRowChanged.connect(self.switch_page)
         self.checklist.setCurrentRow(0)
         self.specs_worker = SpecsWorker(self)
@@ -125,6 +127,10 @@ class MainWindow(QMainWindow):
         self.theme_button = QPushButton()
         self.theme_button.setObjectName("themeButton")
         self.theme_button.setToolTip("Сменить тему (тёмная / светлая)")
+        self.auto_button = QPushButton("▶ Авто-прогон")
+        self.auto_button.setToolTip("Запустить все автоматические тесты подряд без участия мастера")
+        self.auto_button.clicked.connect(self.start_auto_run)
+        layout.addWidget(self.auto_button)
         self.theme_button.clicked.connect(self.toggle_theme)
         self._update_theme_button()
         layout.addWidget(self.theme_button)
@@ -232,6 +238,8 @@ class MainWindow(QMainWindow):
                     self.results[index]["details"] = page.details
                 if page.summary:
                     self.results[index]["summary"] = page.summary
+                if page.grade:
+                    self.results[index]["grade"] = page.grade
             self.report_page.refresh(self.specs, self.results)
 
     def on_completed(self, index, status, advance):
@@ -239,13 +247,54 @@ class MainWindow(QMainWindow):
         self.results[index]["result"] = status
         self.results[index]["details"] = page.details
         self.results[index]["summary"] = page.summary
+        self.results[index]["grade"] = page.grade
         item = self.checklist.item(index)
         passed = status.startswith("Пройден")
         marker = "✓" if passed else "↷"
         item.setText(f"{marker} {index + 1}. {page.title}")
         item.setForeground(QColor("#66bb6a") if passed else QColor("#ffb74d"))
-        if advance:
+        if self.auto_running and index == self.current_row:
+            QTimer.singleShot(500, self._auto_next)
+        elif advance:
             self.checklist.setCurrentRow(min(index + 1, self.checklist.count() - 1))
+
+    def start_auto_run(self):
+        pending = [i for i, page in enumerate(self.pages) if page.auto and page.result is None]
+        if not pending:
+            QMessageBox.information(self, "Авто-прогон",
+                                   "Все автоматические тесты уже выполнены.")
+            return
+        self.auto_running = True
+        self.auto_queue = pending
+        self.auto_button.setEnabled(False)
+        self.auto_button.setText("Авто-прогон идёт…")
+        self._auto_next()
+
+    def _auto_next(self):
+        if not self.auto_running:
+            return
+        while self.auto_queue:
+            index = self.auto_queue.pop(0)
+            if self.pages[index].result is None:
+                self.checklist.setCurrentRow(index)
+                try:
+                    self.pages[index].auto_start()
+                except Exception:
+                    pass
+                return
+        self._auto_finish()
+
+    def _auto_finish(self):
+        self.auto_running = False
+        self.auto_button.setEnabled(True)
+        self.auto_button.setText("▶ Авто-прогон")
+        manual = [page.title for page in self.pages if not page.auto and page.result is None]
+        text = "Автоматические тесты завершены."
+        if manual:
+            text += "\n\nОсталось пройти вручную:\n• " + "\n• ".join(manual)
+        else:
+            text += "\nВсе тесты пройдены — можно открыть отчёт."
+        QMessageBox.information(self, "Авто-прогон", text)
 
     def eventFilter(self, obj, event):
         if event.type() != QEvent.Type.KeyPress:

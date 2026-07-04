@@ -5,6 +5,7 @@ from PyQt6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidg
 class BaseTestPage(QWidget):
     completed = pyqtSignal(int, str, bool)
     wants_raw_keys = False
+    auto = False
     title = ""
     hint = ""
 
@@ -14,6 +15,7 @@ class BaseTestPage(QWidget):
         self.details = ""
         self.result = None
         self.summary = ""
+        self.grade = ""
         root = QVBoxLayout(self)
         root.setContentsMargins(18, 18, 18, 18)
         root.setSpacing(12)
@@ -40,6 +42,9 @@ class BaseTestPage(QWidget):
         self.build_body()
 
     def build_body(self):
+        pass
+
+    def auto_start(self):
         pass
 
     def on_enter(self):

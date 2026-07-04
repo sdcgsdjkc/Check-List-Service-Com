@@ -9,6 +9,7 @@ import psutil
 from PyQt6.QtCore import QThread, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QLabel, QListWidget, QProgressBar
 
+from app.norms import power_on_hours_grade, read_speed_grade, smart_grade
 from app.sysinfo import _powershell
 from app.tests.base import BaseTestPage
 
@@ -118,7 +119,11 @@ class StorageWorker(QThread):
         if sys.platform == "win32":
             try:
                 raw = _powershell(
-                    "Get-PhysicalDisk | Select-Object FriendlyName, MediaType, HealthStatus, Size | ConvertTo-Json",
+                    "Get-PhysicalDisk | ForEach-Object { $r=$_ | Get-StorageReliabilityCounter "
+                    "-ErrorAction SilentlyContinue; [PSCustomObject]@{ FriendlyName=$_.FriendlyName; "
+                    "MediaType=$_.MediaType; HealthStatus=$_.HealthStatus; Size=$_.Size; "
+                    "Temperature=$r.Temperature; PowerOnHours=$r.PowerOnHours; Wear=$r.Wear; "
+                    "ReadErrors=$r.ReadErrorsTotal } } | ConvertTo-Json",
                     timeout=45)
                 data = json.loads(raw) if raw else []
                 if isinstance(data, dict):
@@ -142,6 +147,7 @@ class StorageWorker(QThread):
 class StoragePage(BaseTestPage):
     title = "HDD / SSD"
     hint = "Ожидайте автоматического считывания S.M.A.R.T.-статуса накопителей..."
+    auto = True
     MEDIA = {0: "Накопитель", 3: "HDD", 4: "SSD", 5: "SCM"}
     HEALTH = {0: "Good", 1: "Warning", 2: "Unhealthy"}
 
@@ -162,6 +168,7 @@ class StoragePage(BaseTestPage):
         self.health_summary = ""
         self.healthy = True
         self.auto_pass = True
+        self.smart_grade = "ok"
         self.countdown = 0
         self.advance_timer = QTimer(self)
         self.advance_timer.timeout.connect(self._countdown_tick)
@@ -206,15 +213,19 @@ class StoragePage(BaseTestPage):
         self.disk_list.addItem(f"Тест скорости накопителя ({gb:.1f} ГБ):")
         self.disk_list.addItem(f"    запись — {write_text}")
         self.disk_list.addItem(f"    чтение — {read_text}")
+        grades = [self.smart_grade]
         if write or read:
             speed_text = f"запись {write_text}, чтение {read_text}"
             w = f"{write['avg']}" if write else "н/д"
             r = f"{read['avg']}" if read else "н/д"
             state = self.health_summary.split(";")[0] if self.health_summary else ""
             self.summary = " · ".join(part for part in [state, f"чтение {r} / запись {w} МБ/с"] if part)
+            if read:
+                grades.append(read_speed_grade(read["avg"]))
         else:
             speed_text = f"замер скорости не выполнен ({result.get('error', 'ошибка')})"
             self.summary = self.health_summary
+        self.grade = "bad" if "bad" in grades else "warn" if "warn" in grades else "ok"
         combined = "; ".join(part for part in [self.health_summary, speed_text] if part)
         if self.auto_pass and self.healthy:
             self.auto_ok(combined, advance=False)
@@ -277,16 +288,39 @@ class StoragePage(BaseTestPage):
             return
         healthy = True
         summary = []
+        worst_grade = "ok"
         for disk in data:
             health = self._health_text(disk.get("HealthStatus"))
             media = self._media_text(disk.get("MediaType"))
             size = float(disk.get("Size") or 0) / 1024 ** 3
             name = disk.get("FriendlyName") or "Диск"
-            self.disk_list.addItem(f"{name} — {media}, {size:.0f} ГБ — состояние: {health}")
+            extra = []
+            hours = disk.get("PowerOnHours")
+            temp = disk.get("Temperature")
+            wear = disk.get("Wear")
+            errors = disk.get("ReadErrors")
+            if hours:
+                extra.append(f"наработка {int(hours)} ч")
+            if temp:
+                extra.append(f"{int(temp)} °C")
+            if wear:
+                extra.append(f"износ {int(wear)}%")
+            if errors:
+                extra.append(f"ошибок чтения {int(errors)}")
+            extra_text = ("  [" + ", ".join(extra) + "]") if extra else ""
+            self.disk_list.addItem(f"{name} — {media}, {size:.0f} ГБ — состояние: {health}{extra_text}")
             summary.append(f"{name}: {health}")
+            grade = smart_grade(health == "Good", read_errors=int(errors or 0))
+            if hours and power_on_hours_grade(int(hours)) == "warn" and grade == "ok":
+                grade = "warn"
+            if grade == "bad" or worst_grade == "bad":
+                worst_grade = "bad"
+            elif grade == "warn":
+                worst_grade = "warn"
             if health != "Good":
                 healthy = False
         self.info.setText(f"Накопителей: {len(data)}. Состояние: {'OK' if healthy else 'есть проблемы'}")
         self.health_summary = "; ".join(summary)
         self.healthy = healthy
+        self.smart_grade = worst_grade
         self.start_speed_test()

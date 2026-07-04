@@ -43,6 +43,7 @@ class NetworkWorker(QThread):
 
 class NetworkPage(BaseTestPage):
     title = "Wi-Fi / LAN"
+    auto = True
     hint = "Ожидайте автоматической проверки сетевых адаптеров и пинга..."
 
     def build_body(self):
@@ -72,10 +73,16 @@ class NetworkPage(BaseTestPage):
             self.iface_list.addItem(interface)
         self.info.setText(f"Активных адаптеров: {len(interfaces)}. {note}")
         if ok and interfaces:
+            self.summary = f"адаптеров: {len(interfaces)} · интернет есть"
+            self.grade = "ok"
             self.auto_ok(f"адаптеров: {len(interfaces)}; {note}")
         elif not interfaces:
             self.details = "активные сетевые адаптеры не найдены"
+            self.summary = "адаптеры не найдены"
+            self.grade = "bad"
             self.set_status("активные адаптеры не найдены", False)
         else:
             self.details = note
+            self.summary = f"адаптеров: {len(interfaces)} · нет интернета"
+            self.grade = "warn"
             self.set_status(note, False)

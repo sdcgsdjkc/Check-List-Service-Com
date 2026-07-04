@@ -1,9 +1,11 @@
 import glob
 import json
+import os
 import platform
 import re
 import subprocess
 import sys
+import tempfile
 
 import psutil
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -83,6 +85,28 @@ def _battery_wear_linux():
     return None
 
 
+def _battery_cycles_windows():
+    if sys.platform != "win32":
+        return None
+    try:
+        report = os.path.join(tempfile.gettempdir(), "servicecom_battery.xml")
+        subprocess.run(["powercfg", "/batteryreport", "/xml", "/output", report],
+                       capture_output=True, timeout=25, creationflags=CREATE_NO_WINDOW)
+        with open(report, encoding="utf-8-sig", errors="replace") as handle:
+            text = handle.read()
+        try:
+            os.remove(report)
+        except OSError:
+            pass
+        match = re.search(r"<CycleCount>(\d+)</CycleCount>", text)
+        if match:
+            value = int(match.group(1))
+            return value if value > 0 else None
+    except Exception:
+        return None
+    return None
+
+
 def collect_battery():
     if sys.platform == "win32":
         result = _battery_wear_windows()
@@ -97,7 +121,11 @@ def collect_battery():
         return "н/д", f"заряд {battery.percent:.0f}%"
     design, full = result
     wear = max(0.0, (1.0 - full / design) * 100.0)
-    return f"{wear:.0f}%", f"{full:.0f} / {design:.0f} мВт·ч"
+    note = f"{full:.0f} / {design:.0f} мВт·ч"
+    cycles = _battery_cycles_windows()
+    if cycles is not None:
+        note += f" · {cycles} циклов"
+    return f"{wear:.0f}%", note
 
 
 CHASSIS_TYPES = {

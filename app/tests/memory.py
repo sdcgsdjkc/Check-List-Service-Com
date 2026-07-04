@@ -1,9 +1,12 @@
+import json
 import re
+import sys
 
 import psutil
 from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtWidgets import QLabel, QProgressBar
 
+from app.sysinfo import _powershell
 from app.tests.base import BaseTestPage
 
 
@@ -68,28 +71,75 @@ class MemoryWorker(QThread):
             self.done.emit(False, f"сбой теста: {exc}")
 
 
+class ModulesWorker(QThread):
+    done = pyqtSignal(str)
+
+    def run(self):
+        if sys.platform != "win32":
+            self.done.emit("")
+            return
+        try:
+            raw = _powershell(
+                "Get-CimInstance Win32_PhysicalMemory | Select-Object Manufacturer, PartNumber, "
+                "Capacity, Speed | ConvertTo-Json", timeout=20)
+            data = json.loads(raw) if raw else []
+            if isinstance(data, dict):
+                data = [data]
+            lines = []
+            for module in data:
+                cap = float(module.get("Capacity") or 0) / 1024 ** 3
+                speed = module.get("Speed")
+                part = (module.get("PartNumber") or "").strip()
+                man = (module.get("Manufacturer") or "").strip()
+                text = f"{cap:.0f} ГБ"
+                if speed:
+                    text += f" @ {speed} МГц"
+                if man and man.lower() not in ("", "unknown"):
+                    text += f" · {man}"
+                if part:
+                    text += f" · {part}"
+                lines.append(text)
+            self.done.emit(" | ".join(lines))
+        except Exception:
+            self.done.emit("")
+
+
 class MemoryPage(BaseTestPage):
     title = "ОЗУ"
     hint = "Ожидайте завершения экспресс-теста оперативной памяти..."
+    auto = True
 
     def build_body(self):
         self.bar = QProgressBar()
         self.bar.setRange(0, 100)
         self.info = QLabel("Тест не запускался")
+        self.modules_label = QLabel("Модули: считываются...")
+        self.modules_label.setObjectName("specLabel")
+        self.modules_label.setWordWrap(True)
         self.body.addWidget(self.bar)
         self.body.addWidget(self.info)
+        self.body.addWidget(self.modules_label)
         self.body.addStretch(1)
         self.worker = None
+        self.modules_worker = None
+        self.modules_text = ""
 
     def on_enter(self):
         if self.worker is not None:
             return
         self.info.setText("Идет запись и проверка паттернов 0x55 / 0xAA...")
         self.set_status("идет экспресс-тест ОЗУ...")
+        self.modules_worker = ModulesWorker(self)
+        self.modules_worker.done.connect(self.on_modules)
+        self.modules_worker.start()
         self.worker = MemoryWorker(self)
         self.worker.progress.connect(self.bar.setValue)
         self.worker.done.connect(self.on_done)
         self.worker.start()
+
+    def on_modules(self, text):
+        self.modules_text = text
+        self.modules_label.setText("Модули: " + (text if text else "данные недоступны"))
 
     def on_leave(self):
         if self.worker is not None and self.worker.isRunning():
@@ -101,6 +151,7 @@ class MemoryPage(BaseTestPage):
         tested = f"{match.group(1)} МБ" if match else ""
         errors = "0 ошибок" if ok else "есть ошибки"
         self.summary = " · ".join(part for part in [tested, errors] if part)
+        self.grade = "ok" if ok else "bad"
         if ok:
             self.auto_ok(details)
         else:

@@ -32,6 +32,7 @@ class DriversWorker(QThread):
 
 class DriversPage(BaseTestPage):
     title = "Драйверы"
+    auto = True
     hint = "Ожидайте, идет сканирование диспетчера устройств на наличие ошибок..."
 
     def build_body(self):
@@ -63,6 +64,8 @@ class DriversPage(BaseTestPage):
             return
         if not devices:
             self.info.setText("Устройств с ошибками не найдено")
+            self.summary = "ошибок нет"
+            self.grade = "ok"
             self.auto_ok("ошибок в диспетчере устройств нет")
             return
         for device in devices:
@@ -71,4 +74,6 @@ class DriversPage(BaseTestPage):
             self.problem_list.addItem(f"{name} — код ошибки {code}")
         self.info.setText(f"Найдено проблемных устройств: {len(devices)}")
         self.details = f"устройств с ошибками: {len(devices)}"
+        self.summary = f"проблемных устройств: {len(devices)}"
+        self.grade = "bad"
         self.set_status(f"найдены ошибки драйверов ({len(devices)})", False)

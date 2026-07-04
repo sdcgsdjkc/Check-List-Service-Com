@@ -32,6 +32,7 @@ class ScanWorker(QThread):
 
 class UserDataPage(BaseTestPage):
     title = "Сохранение данных"
+    auto = True
     hint = "Проверка пользовательских данных на Рабочем столе и в профиле..."
 
     def build_body(self):
@@ -61,6 +62,8 @@ class UserDataPage(BaseTestPage):
         if not found:
             self.info.setText("Чистая ОС")
             self.info.setStyleSheet("color:#66bb6a;font-size:17px;font-weight:700;padding:6px;")
+            self.summary = "чистая ОС"
+            self.grade = "ok"
             self.auto_ok("чистая ОС, данные пользователя не обнаружены")
             return
         for item in found[:300]:
@@ -70,4 +73,6 @@ class UserDataPage(BaseTestPage):
         self.info.setText(f"Данные пользователя обнаружены: {len(found)} объектов")
         self.info.setStyleSheet("color:#ffb74d;font-size:17px;font-weight:700;padding:6px;")
         self.details = f"обнаружены данные пользователя ({len(found)} объектов)"
+        self.summary = f"данные пользователя: {len(found)} объектов"
+        self.grade = "warn"
         self.set_status("данные пользователя обнаружены — согласуйте сохранение", "warn")

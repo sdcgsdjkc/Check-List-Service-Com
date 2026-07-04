@@ -6,6 +6,7 @@ from PyQt6.QtCore import QPointF, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QPen, QPolygonF
 from PyQt6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
+from app.norms import temperature_grade
 from app.sysinfo import read_temperature
 from app.tests.base import BaseTestPage
 
@@ -186,6 +187,7 @@ class TempGraph(QWidget):
 
 class StressPage(BaseTestPage):
     title = "Стресс-тест (нагрузка)"
+    auto = True
     hint = "Нажмите «Старт» для запуска 2-минутного теста стабильности CPU/GPU и следите за температурой."
 
     def build_body(self):
@@ -219,6 +221,10 @@ class StressPage(BaseTestPage):
         self.monitor = None
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.tick)
+
+    def auto_start(self):
+        if self.engine is None:
+            self.start_test()
 
     def toggle(self):
         if self.engine is not None:
@@ -288,8 +294,10 @@ class StressPage(BaseTestPage):
             avg_temp = sum(self.temp_samples) / len(self.temp_samples)
             temp_note = f"температура сред. {avg_temp:.0f} °C / макс. {self.max_temp:.0f} °C"
             summary_parts.append(f"сред. {avg_temp:.0f} °C / макс. {self.max_temp:.0f} °C")
+            self.grade = temperature_grade(self.max_temp)
         else:
             temp_note = "температура: датчик недоступен"
+            self.grade = "ok"
         self.summary = " · ".join(summary_parts)
         parts = [f"{DURATION} с без сбоев", load_note, temp_note]
         self.auto_ok(", ".join(part for part in parts if part))
