@@ -1,0 +1,4 @@
+PyQt6>=6.6
+psutil>=5.9
+numpy>=1.26
+pythonnet>=3.0.3
