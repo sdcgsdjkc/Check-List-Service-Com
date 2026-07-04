@@ -23,6 +23,14 @@ def acquire_single_instance():
     return True
 
 
+def splash_text(text):
+    try:
+        import pyi_splash
+        pyi_splash.update_text(text)
+    except Exception:
+        pass
+
+
 def close_splash():
     try:
         import pyi_splash
@@ -86,12 +94,14 @@ def main():
     if not acquire_single_instance():
         close_splash()
         sys.exit(0)
+    splash_text("Запуск интерфейса...")
     app = QApplication(sys.argv)
     app.setApplicationName("Сервис • Com — Диагностика устройств")
     theme_name = config.load().get("theme", "dark")
     if theme_name not in ("dark", "light"):
         theme_name = "dark"
     app.setStyleSheet(stylesheet(theme_name))
+    splash_text("Загрузка тестов...")
     window = MainWindow(theme_name)
     app.installEventFilter(window)
     window.show()
