@@ -79,9 +79,12 @@ class MainWindow(QMainWindow):
         if answer != QMessageBox.StandardButton.Yes:
             return
         if origin_exe() is None:
-            QMessageBox.warning(self, "Обновление",
-                                "Не найден исходный файл на съёмном диске (флешке). "
-                                "Вставьте флешку, с которой запущена программа, и повторите.")
+            QMessageBox.information(
+                self, "Обновление",
+                "Автообновление работает только при запуске программы с флешки "
+                "(тогда файл на флешке можно перезаписать).\n\n"
+                "Сейчас программа запущена не с флешки, поэтому скачайте новую версию "
+                f"вручную со страницы релизов на GitHub (версия {info['version']}).")
             return
         self.update_downloader = UpdateDownloader(info["url"], self)
         self.update_downloader.done.connect(self.on_update_done)
