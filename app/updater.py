@@ -2,7 +2,9 @@ import json
 import os
 import re
 import ssl
+import subprocess
 import sys
+import tempfile
 import urllib.request
 
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -97,10 +99,32 @@ def check():
     return None
 
 
+def _spawn_swap_helper(target, temp, old):
+    exe_name = os.path.basename(target)
+    pid = os.getpid()
+    script = (
+        "@echo off\r\n"
+        ":wait\r\n"
+        f'tasklist /FI "PID eq {pid}" 2>NUL | find /I "{exe_name}" >NUL\r\n'
+        "if not errorlevel 1 (\r\n"
+        "  ping -n 2 127.0.0.1 >NUL\r\n"
+        "  goto wait\r\n"
+        ")\r\n"
+        f'move /y "{temp}" "{target}" >NUL 2>&1\r\n'
+        f'if exist "{old}" del "{old}" >NUL 2>&1\r\n'
+        f'start "" "{target}"\r\n'
+        'del "%~f0"\r\n'
+    )
+    bat = os.path.join(tempfile.gettempdir(), "scaa_update.bat")
+    with open(bat, "w", encoding="ascii", errors="replace") as handle:
+        handle.write(script)
+    subprocess.Popen(["cmd", "/c", bat], close_fds=True, creationflags=0x00000008)
+
+
 def download_and_install(url):
     target, running = update_target()
     if not target:
-        return False, "не удалось определить файл программы для обновления"
+        return False, "не удалось определить файл программы для обновления", False
     temp = target + ".new"
     old = target + ".old"
     try:
@@ -109,27 +133,31 @@ def download_and_install(url):
         with urllib.request.urlopen(request, timeout=120, context=context) as response:
             data = response.read()
         if len(data) < 100000:
-            return False, "загруженный файл повреждён"
+            return False, "загруженный файл повреждён", False
         with open(temp, "wb") as handle:
             handle.write(data)
-        if running:
-            try:
-                if os.path.exists(old):
-                    os.remove(old)
-            except OSError:
-                pass
+        if not running:
+            os.replace(temp, target)
+            return True, target, False
+        try:
+            if os.path.exists(old):
+                os.remove(old)
+        except OSError:
+            pass
+        try:
             os.rename(target, old)
             os.rename(temp, target)
-        else:
-            os.replace(temp, target)
-        return True, target
+            return True, target, False
+        except OSError:
+            _spawn_swap_helper(target, temp, old)
+            return True, "restart", True
     except Exception as exc:
         try:
             if os.path.exists(temp):
                 os.remove(temp)
         except OSError:
             pass
-        return False, str(exc)
+        return False, str(exc), False
 
 
 class UpdateChecker(QThread):
@@ -140,12 +168,12 @@ class UpdateChecker(QThread):
 
 
 class UpdateDownloader(QThread):
-    done = pyqtSignal(bool, str)
+    done = pyqtSignal(bool, str, bool)
 
     def __init__(self, url, parent=None):
         super().__init__(parent)
         self.url = url
 
     def run(self):
-        ok, message = download_and_install(self.url)
-        self.done.emit(ok, message)
+        ok, message, restart = download_and_install(self.url)
+        self.done.emit(ok, message, restart)

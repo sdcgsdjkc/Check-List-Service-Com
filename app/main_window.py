@@ -88,14 +88,20 @@ class MainWindow(QMainWindow):
         self.update_downloader.done.connect(self.on_update_done)
         self.update_downloader.start()
 
-    def on_update_done(self, ok, message):
-        if ok:
+    def on_update_done(self, ok, message, restart):
+        if not ok:
+            QMessageBox.warning(self, "Обновление не удалось", f"Не удалось обновить:\n{message}")
+            return
+        if restart:
+            QMessageBox.information(
+                self, "Обновление",
+                "Программа сейчас закроется, обновится и запустится заново автоматически.")
+            QApplication.instance().quit()
+        else:
             QMessageBox.information(
                 self, "Обновление завершено",
                 "Программа обновлена. Новая версия вступит в силу при следующем запуске.\n\n"
                 "Закройте программу и запустите заново.")
-        else:
-            QMessageBox.warning(self, "Обновление не удалось", f"Не удалось обновить:\n{message}")
 
     def _build_header(self):
         header = QWidget()
