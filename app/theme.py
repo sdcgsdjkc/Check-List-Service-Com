@@ -124,6 +124,12 @@ QPushButton:pressed {{ background: {c['accent']}; color: #ffffff; }}
               font-weight: 700; color: #ffffff; }}
 #passButton:hover {{ background: {c['pass_border']}; }}
 #skipButton {{ background: {c['skip_bg']}; }}
+#failButton {{ background: transparent; border: 1px solid {c['fail']}; color: {c['fail']};
+              font-weight: 700; }}
+#failButton:hover {{ background: {c['fail']}; color: #ffffff; }}
+#ghostButton {{ background: transparent; border: 1px solid {c['btn_border']};
+               color: {c['status_label']}; }}
+#ghostButton:hover {{ background: {c['btn_hover']}; }}
 QListWidget {{ background: {c['list_bg']}; border: 1px solid {c['list_border']};
               border-radius: 16px; outline: none; padding: 6px; }}
 QListWidget::item {{ padding: 11px 10px; border-radius: 10px; margin: 2px 2px; }}

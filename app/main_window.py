@@ -305,8 +305,12 @@ class MainWindow(QMainWindow):
         self.results[index]["summary"] = page.summary
         self.results[index]["grade"] = page.grade
         item = self.checklist.item(index)
-        passed = status.startswith("Пройден")
-        marker = "✓" if passed else "↷"
+        if status.startswith("Пройден"):
+            marker = "✓"
+        elif status.startswith("Пропущен"):
+            marker = "↷"
+        else:
+            marker = "✕"
         item.setText(f"{marker} {index + 1}. {page.title}")
         item.setForeground(self._item_color(status))
         if self.auto_running and index == self.current_row:
