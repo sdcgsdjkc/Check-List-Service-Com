@@ -6,12 +6,68 @@ import tempfile
 import time
 
 import psutil
-from PyQt6.QtCore import QThread, QTimer, pyqtSignal
-from PyQt6.QtWidgets import QLabel, QListWidget, QProgressBar
+from PyQt6.QtCore import QPointF, Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtGui import QColor, QPainter, QPen, QPolygonF
+from PyQt6.QtWidgets import QLabel, QListWidget, QProgressBar, QWidget
 
 from app.norms import power_on_hours_grade, read_speed_grade, smart_grade
 from app.sysinfo import _powershell
 from app.tests.base import BaseTestPage
+
+
+class SpeedGraph(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.samples = []
+        self.slow_threshold = 0.0
+        self.setMinimumHeight(180)
+
+    def reset(self):
+        self.samples = []
+        self.slow_threshold = 0.0
+        self.update()
+
+    def add(self, speed):
+        self.samples.append(speed)
+        self.update()
+
+    def set_threshold(self, value):
+        self.slow_threshold = value
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), QColor("#0f1216"))
+        w, h = self.width(), self.height()
+        peak = max(self.samples) if self.samples else 1.0
+        peak = max(peak, 1.0)
+        painter.setPen(QColor("#1b2027"))
+        for frac in (0.25, 0.5, 0.75):
+            y = int(h * frac)
+            painter.drawLine(0, y, w, y)
+        if self.slow_threshold > 0:
+            y = int(h - self.slow_threshold / peak * (h - 8) - 4)
+            painter.setPen(QPen(QColor("#e0b13a"), 1, Qt.PenStyle.DashLine))
+            painter.drawLine(0, y, w, y)
+        if len(self.samples) >= 2:
+            step = w / max(1, len(self.samples) - 1)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            points = [QPointF(i * step, h - s / peak * (h - 8) - 4)
+                      for i, s in enumerate(self.samples)]
+            painter.setPen(QPen(QColor("#1e88e5"), 2))
+            painter.drawPolyline(QPolygonF(points))
+            if self.slow_threshold > 0:
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QColor(224, 79, 79, 200))
+                for i, s in enumerate(self.samples):
+                    if s < self.slow_threshold:
+                        painter.drawEllipse(QPointF(i * step, h - s / peak * (h - 8) - 4), 3, 3)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QColor("#8b95a1"))
+        painter.drawText(8, 16, f"пик {peak:.0f} МБ/с")
+        painter.setPen(QColor("#2c3947"))
+        painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
+
 
 BLOCK = 8 * 1024 * 1024
 WINDOW = 64 * 1024 * 1024
@@ -28,6 +84,7 @@ def _stats(samples, size_mb, total_time):
 class SpeedWorker(QThread):
     done = pyqtSignal(object)
     progress = pyqtSignal(int)
+    sample = pyqtSignal(str, float, float)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -79,6 +136,8 @@ class SpeedWorker(QThread):
                     os.fsync(handle.fileno())
                 except OSError:
                     pass
+            for sp in samples:
+                self.sample.emit("write", 0.0, sp)
             write_stats = _stats(samples, size_mb, time.perf_counter() - start)
             samples = []
             start = time.perf_counter()
@@ -96,12 +155,15 @@ class SpeedWorker(QThread):
                     win_bytes += len(chunk)
                     if win_bytes >= WINDOW:
                         now = time.perf_counter()
-                        samples.append(win_bytes / (1024 * 1024) / max(1e-6, now - win_start))
+                        speed = win_bytes / (1024 * 1024) / max(1e-6, now - win_start)
+                        samples.append(speed)
+                        self.sample.emit("read", read / total * 100.0, speed)
                         win_start = now
                         win_bytes = 0
                     self.progress.emit(50 + int(read / total * 50))
             read_stats = _stats(samples, size_mb, time.perf_counter() - start)
-            self.done.emit({"write": write_stats, "read": read_stats, "size_mb": size_mb})
+            self.done.emit({"write": write_stats, "read": read_stats,
+                            "size_mb": size_mb, "read_samples": samples})
         except Exception as exc:
             self.done.emit({"write": write_stats, "read": read_stats,
                             "size_mb": size_mb, "error": str(exc)})
@@ -158,10 +220,12 @@ class StoragePage(BaseTestPage):
         self.info = QLabel("Проверка не запускалась")
         self.speed_label = QLabel("Скорость: —")
         self.speed_label.setObjectName("bigValue")
+        self.graph = SpeedGraph()
         self.disk_list = QListWidget()
         self.body.addWidget(self.busy)
         self.body.addWidget(self.info)
         self.body.addWidget(self.speed_label)
+        self.body.addWidget(self.graph)
         self.body.addWidget(self.disk_list, 1)
         self.worker = None
         self.speed_worker = None
@@ -177,6 +241,7 @@ class StoragePage(BaseTestPage):
         self.advance_timer.stop()
         self.countdown = 0
         self.disk_list.clear()
+        self.graph.reset()
         self.busy.hide()
         self.info.setText("Проверка не запускалась")
         self.speed_label.setText("Скорость: —")
@@ -199,12 +264,19 @@ class StoragePage(BaseTestPage):
         self.busy.setRange(0, 100)
         self.busy.setValue(0)
         self.busy.show()
+        self.graph.reset()
         self.speed_label.setText("Скорость: идет замер записи/чтения (2 ГБ)...")
         self.set_status("замер скорости накопителя...")
         self.speed_worker = SpeedWorker(self)
         self.speed_worker.progress.connect(self.busy.setValue)
+        self.speed_worker.sample.connect(self.on_speed_sample)
         self.speed_worker.done.connect(self.on_speed_done)
         self.speed_worker.start()
+
+    def on_speed_sample(self, phase, position, speed):
+        if phase == "read":
+            self.graph.add(speed)
+            self.speed_label.setText(f"Чтение: {speed:.0f} МБ/с  (позиция {position:.0f}%)")
 
     @staticmethod
     def _fmt(stats):
@@ -226,14 +298,30 @@ class StoragePage(BaseTestPage):
         self.disk_list.addItem(f"    запись — {write_text}")
         self.disk_list.addItem(f"    чтение — {read_text}")
         grades = [self.smart_grade]
+        zone_note = ""
         if write or read:
             speed_text = f"запись {write_text}, чтение {read_text}"
             w = f"{write['avg']}" if write else "н/д"
             r = f"{read['avg']}" if read else "н/д"
             state = self.health_summary.split(";")[0] if self.health_summary else ""
-            self.summary = " · ".join(part for part in [state, f"чтение {r} / запись {w} МБ/с"] if part)
             if read:
                 grades.append(read_speed_grade(read["avg"]))
+                samples = result.get("read_samples") or []
+                if samples and len(samples) >= 4:
+                    threshold = read["max"] * 0.5
+                    self.graph.set_threshold(threshold)
+                    slow = sum(1 for s in samples if s < threshold)
+                    ratio = slow / len(samples)
+                    if read["min"] < read["max"] * 0.35 and ratio > 0.15:
+                        grades.append("bad")
+                        zone_note = f"провалы скорости: {slow} из {len(samples)} зон (деградация)"
+                        self.disk_list.addItem(f"    ⚠ {zone_note}")
+                    elif read["min"] < read["max"] * 0.5:
+                        grades.append("warn")
+                        zone_note = f"неравномерная скорость (мин {read['min']} / макс {read['max']})"
+                        self.disk_list.addItem(f"    {zone_note}")
+            self.summary = " · ".join(part for part in [
+                state, f"чтение {r} / запись {w} МБ/с", zone_note] if part)
         else:
             speed_text = f"замер скорости не выполнен ({result.get('error', 'ошибка')})"
             self.summary = self.health_summary
