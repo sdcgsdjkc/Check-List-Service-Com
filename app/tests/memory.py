@@ -124,6 +124,11 @@ class MemoryPage(BaseTestPage):
         self.modules_worker = None
         self.modules_text = ""
 
+    def reset_state(self):
+        self.bar.setValue(0)
+        self.info.setText("Тест не запускался")
+        self.modules_label.setText("Модули: считываются...")
+
     def on_enter(self):
         if self.worker is not None:
             return

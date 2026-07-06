@@ -47,6 +47,11 @@ class UserDataPage(BaseTestPage):
         self.body.addWidget(self.found_list, 1)
         self.worker = None
 
+    def reset_state(self):
+        self.found_list.clear()
+        self.info.setText("Сканирование не запускалось")
+        self.info.setStyleSheet("")
+
     def on_enter(self):
         if self.worker is not None:
             return

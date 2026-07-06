@@ -28,6 +28,14 @@ class PortsPage(BaseTestPage):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.poll)
 
+    def reset_state(self):
+        self.log.clear()
+        self.cycles = 0
+        self.known = None
+        self.ac_seen = False
+        self.usb_label.setText("Циклы USB: 0")
+        self.ac_label.setText("Зарядка: —")
+
     def on_enter(self):
         self.timer.start(700)
         self.set_status("идет мониторинг портов и питания...")

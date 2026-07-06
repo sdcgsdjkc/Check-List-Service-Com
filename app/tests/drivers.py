@@ -46,6 +46,10 @@ class DriversPage(BaseTestPage):
         self.body.addWidget(self.problem_list, 1)
         self.worker = None
 
+    def reset_state(self):
+        self.problem_list.clear()
+        self.info.setText("Сканирование не запускалось")
+
     def on_enter(self):
         if self.worker is not None:
             return

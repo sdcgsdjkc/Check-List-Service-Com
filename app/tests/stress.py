@@ -222,6 +222,18 @@ class StressPage(BaseTestPage):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.tick)
 
+    def reset_state(self):
+        self.graph.clear()
+        self.gpu.stop()
+        self.max_temp = None
+        self.max_load = 0.0
+        self.temp_samples = []
+        self.load_samples = []
+        self.time_label.setText("—")
+        self.load_label.setText("Нагрузка CPU: —")
+        self.temp_label.setText("Температура: —")
+        self.start_button.setText("Старт (2 минуты)")
+
     def auto_start(self):
         if self.engine is None:
             self.start_test()

@@ -77,6 +77,12 @@ class KeyboardPage(BaseTestPage):
         percent = len(self.pressed) / self.total * 100
         self.progress_label.setText(f"Нажато {len(self.pressed)} из {self.total} ({percent:.0f}%)")
 
+    def reset_state(self):
+        self.pressed.clear()
+        for cell in self.cells.values():
+            cell.setStyleSheet(KEY_STYLE)
+        self.update_progress()
+
     def on_enter(self):
         self.grabKeyboard()
         self.set_status("нажимайте клавиши...")

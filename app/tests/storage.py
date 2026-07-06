@@ -173,6 +173,18 @@ class StoragePage(BaseTestPage):
         self.advance_timer = QTimer(self)
         self.advance_timer.timeout.connect(self._countdown_tick)
 
+    def reset_state(self):
+        self.advance_timer.stop()
+        self.countdown = 0
+        self.disk_list.clear()
+        self.busy.hide()
+        self.info.setText("Проверка не запускалась")
+        self.speed_label.setText("Скорость: —")
+        self.health_summary = ""
+        self.healthy = True
+        self.auto_pass = True
+        self.smart_grade = "ok"
+
     def on_enter(self):
         if self.worker is not None:
             return

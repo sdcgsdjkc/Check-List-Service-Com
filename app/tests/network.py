@@ -57,6 +57,10 @@ class NetworkPage(BaseTestPage):
         self.body.addWidget(self.iface_list, 1)
         self.worker = None
 
+    def reset_state(self):
+        self.iface_list.clear()
+        self.info.setText("Проверка не запускалась")
+
     def on_enter(self):
         if self.worker is not None:
             return

@@ -84,6 +84,10 @@ class TouchpadPage(BaseTestPage):
         self.body.addWidget(self.zone, 1)
         self.tracker = None
 
+    def reset_state(self):
+        self.zone.reset()
+        self.progress_label.setText("Покрытие: 0%")
+
     def on_enter(self):
         if not is_supported():
             self.mode_label.setText("Режим: курсор (raw-трекинг только на Windows)")

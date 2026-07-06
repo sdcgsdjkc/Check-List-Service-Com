@@ -42,6 +42,7 @@ class MainWindow(QMainWindow):
         for index, page_class in enumerate(PAGE_CLASSES):
             page = page_class(index)
             page.completed.connect(self.on_completed)
+            page.restarted.connect(self.on_restarted)
             self.pages.append(page)
             self.stack.addWidget(page)
             self.results.append({"title": page_class.title, "result": "Не выполнялся",
@@ -195,6 +196,7 @@ class MainWindow(QMainWindow):
         QApplication.instance().setStyleSheet(stylesheet(self.theme_name))
         self._update_theme_button()
         self.report_page.set_colors(colors(self.theme_name))
+        self._refresh_item_colors()
         data = config.load()
         data["theme"] = self.theme_name
         config.save(data)
@@ -204,9 +206,18 @@ class MainWindow(QMainWindow):
         caption_label.setObjectName("specLabel")
         value_label = QLabel("…")
         value_label.setObjectName("specValue")
+        value_label.setMaximumWidth(230)
         grid.addWidget(caption_label, row, column * 2)
         grid.addWidget(value_label, row, column * 2 + 1)
         return value_label
+
+    @staticmethod
+    def _set_spec(label, text):
+        text = text or "н/д"
+        metrics = label.fontMetrics()
+        elided = metrics.elidedText(text, Qt.TextElideMode.ElideRight, label.maximumWidth() - 6)
+        label.setText(elided)
+        label.setToolTip(text if elided != text else "")
 
     def _build_footer(self):
         footer = QHBoxLayout()
@@ -222,10 +233,10 @@ class MainWindow(QMainWindow):
 
     def apply_specs(self, specs):
         self.specs = specs
-        self.model_value.setText(specs.get("model", "н/д"))
-        self.cpu_value.setText(specs.get("cpu", "н/д"))
-        self.type_value.setText(specs.get("device_type", "—"))
-        self.ram_value.setText(specs.get("ram", "н/д"))
+        self._set_spec(self.model_value, specs.get("model", "н/д"))
+        self._set_spec(self.cpu_value, specs.get("cpu", "н/д"))
+        self._set_spec(self.type_value, specs.get("device_type", "—"))
+        self._set_spec(self.ram_value, specs.get("ram", "н/д"))
         wear_text = specs.get("battery_wear", "н/д")
         note = specs.get("battery_note", "")
         self.battery_value.setText(wear_text + (f" ({note})" if note else ""))
@@ -264,6 +275,29 @@ class MainWindow(QMainWindow):
                     self.results[index]["grade"] = page.grade
             self.report_page.refresh(self.specs, self.results)
 
+    def _item_color(self, status):
+        c = colors(self.theme_name)
+        if status.startswith("Пройден"):
+            return QColor(c["pass"])
+        if status.startswith("Пропущен"):
+            return QColor(c["skip"])
+        if status.startswith("Не выполн"):
+            return QColor(c["text"])
+        return QColor(c["fail"])
+
+    def _refresh_item_colors(self):
+        for index in range(len(self.pages)):
+            self.checklist.item(index).setForeground(
+                self._item_color(self.results[index]["result"]))
+
+    def on_restarted(self, index):
+        page = self.pages[index]
+        self.results[index].update({"result": "Не выполнялся", "details": "",
+                                    "summary": "", "grade": ""})
+        item = self.checklist.item(index)
+        item.setText(f"{index + 1}. {page.title}")
+        item.setForeground(self._item_color("Не выполнялся"))
+
     def on_completed(self, index, status, advance):
         page = self.pages[index]
         self.results[index]["result"] = status
@@ -274,7 +308,7 @@ class MainWindow(QMainWindow):
         passed = status.startswith("Пройден")
         marker = "✓" if passed else "↷"
         item.setText(f"{marker} {index + 1}. {page.title}")
-        item.setForeground(QColor("#66bb6a") if passed else QColor("#ffb74d"))
+        item.setForeground(self._item_color(status))
         if self.auto_running and index == self.current_row:
             QTimer.singleShot(500, self._auto_next)
         elif advance:

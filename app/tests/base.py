@@ -4,6 +4,7 @@ from PyQt6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidg
 
 class BaseTestPage(QWidget):
     completed = pyqtSignal(int, str, bool)
+    restarted = pyqtSignal(int)
     wants_raw_keys = False
     auto = False
     title = ""
@@ -34,8 +35,12 @@ class BaseTestPage(QWidget):
         self.pass_button.setObjectName("passButton")
         self.skip_button = QPushButton("Пропустить")
         self.skip_button.setObjectName("skipButton")
+        self.repeat_button = QPushButton("↻ Повторить")
+        self.repeat_button.setToolTip("Сбросить и пройти этот тест заново")
+        self.repeat_button.clicked.connect(self.repeat)
         self.pass_button.clicked.connect(lambda: self.finish("Пройден"))
         self.skip_button.clicked.connect(lambda: self.finish("Пропущен"))
+        controls.addWidget(self.repeat_button)
         controls.addWidget(self.pass_button)
         controls.addWidget(self.skip_button)
         root.addLayout(controls)
@@ -43,6 +48,32 @@ class BaseTestPage(QWidget):
 
     def build_body(self):
         pass
+
+    def reset_state(self):
+        pass
+
+    def repeat(self):
+        try:
+            self.on_leave()
+        except Exception:
+            pass
+        for attr in ("worker", "speed_worker", "monitor", "modules_worker", "engine"):
+            if hasattr(self, attr):
+                setattr(self, attr, None)
+        self.result = None
+        self.details = ""
+        self.summary = ""
+        self.grade = ""
+        try:
+            self.reset_state()
+        except Exception:
+            pass
+        self.set_status("тест сброшен, запуск заново...")
+        self.restarted.emit(self.index)
+        try:
+            self.on_enter()
+        except Exception:
+            pass
 
     def auto_start(self):
         pass
