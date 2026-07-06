@@ -83,6 +83,32 @@ def read_temperature():
         return None
 
 
+def read_gpu():
+    if not _init():
+        return None
+    computer = _state["computer"]
+    sensor_type = _state["sensor_type"]
+    try:
+        for hardware in computer.Hardware:
+            if "gpu" not in str(hardware.HardwareType).lower():
+                continue
+            hardware.Update()
+            load = temp = None
+            for sensor in hardware.Sensors:
+                if sensor.Value is None:
+                    continue
+                stype = str(sensor.SensorType).lower()
+                sname = str(sensor.Name).lower()
+                if stype == "load" and "core" in sname and load is None:
+                    load = round(float(sensor.Value), 1)
+                elif stype == "temperature" and "hot" not in sname and temp is None:
+                    temp = round(float(sensor.Value), 1)
+            return {"name": str(hardware.Name), "load": load, "temp": temp, "present": True}
+        return {"name": None, "load": None, "temp": None, "present": False}
+    except Exception:
+        return None
+
+
 def close():
     computer = _state.get("computer")
     if computer is not None:

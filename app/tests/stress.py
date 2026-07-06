@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidg
 
 from app.norms import temperature_grade
 from app.sysinfo import read_temperature
+from app.temperature import read_gpu
 from app.tests.base import BaseTestPage
 
 try:
@@ -120,6 +121,7 @@ class GpuFallbackWidget(QWidget):
 
 class SensorWorker(QThread):
     sample = pyqtSignal(float, object)
+    gpu = pyqtSignal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -135,8 +137,13 @@ class SensorWorker(QThread):
                 self._temp_failures += 1
             else:
                 self._temp_failures = 0
+            try:
+                gpu = read_gpu()
+            except Exception:
+                gpu = None
             if self._active:
                 self.sample.emit(float(load), temp)
+                self.gpu.emit(gpu)
 
     def stop(self):
         self._active = False
@@ -202,6 +209,9 @@ class StressPage(BaseTestPage):
         top.addStretch(1)
         top.addWidget(self.load_label)
         top.addWidget(self.temp_label)
+        self.gpu_label = QLabel("GPU: —")
+        self.gpu_label.setObjectName("specLabel")
+        self.gpu_label.setWordWrap(True)
         self.vectors_label = QLabel("Векторы нагрузки: CPU-процессы + матрицы FP + пропускная способность ОЗУ + GPU-шейдер")
         self.vectors_label.setObjectName("specLabel")
         self.middle = QHBoxLayout()
@@ -210,6 +220,7 @@ class StressPage(BaseTestPage):
         self.middle.addWidget(self.gpu, 1)
         self.middle.addWidget(self.graph, 1)
         self.body.addLayout(top)
+        self.body.addWidget(self.gpu_label)
         self.body.addWidget(self.vectors_label)
         self.body.addLayout(self.middle, 1)
         self.engine = None
@@ -218,6 +229,10 @@ class StressPage(BaseTestPage):
         self.max_load = 0.0
         self.temp_samples = []
         self.load_samples = []
+        self.gpu_seen = False
+        self.gpu_dropped = False
+        self.gpu_name = ""
+        self.max_gpu_temp = None
         self.monitor = None
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.tick)
@@ -229,9 +244,14 @@ class StressPage(BaseTestPage):
         self.max_load = 0.0
         self.temp_samples = []
         self.load_samples = []
+        self.gpu_seen = False
+        self.gpu_dropped = False
+        self.gpu_name = ""
+        self.max_gpu_temp = None
         self.time_label.setText("—")
         self.load_label.setText("Нагрузка CPU: —")
         self.temp_label.setText("Температура: —")
+        self.gpu_label.setText("GPU: —")
         self.start_button.setText("Старт (2 минуты)")
 
     def auto_start(self):
@@ -250,6 +270,10 @@ class StressPage(BaseTestPage):
         self.max_load = 0.0
         self.temp_samples = []
         self.load_samples = []
+        self.gpu_seen = False
+        self.gpu_dropped = False
+        self.gpu_name = ""
+        self.max_gpu_temp = None
         self.engine = StressEngine()
         self.engine.start()
         if self.engine.vectors:
@@ -258,6 +282,7 @@ class StressPage(BaseTestPage):
         self.gpu.start()
         self.monitor = SensorWorker(self)
         self.monitor.sample.connect(self.on_sample)
+        self.monitor.gpu.connect(self.on_gpu)
         self.monitor.start()
         self.seconds_left = DURATION
         self.time_label.setText(f"Осталось: {self.seconds_left} с")
@@ -282,6 +307,27 @@ class StressPage(BaseTestPage):
         else:
             self.temp_label.setText("Температура: датчик недоступен")
         self.graph.add(load, temp)
+
+    def on_gpu(self, gpu):
+        if gpu is None:
+            return
+        name = gpu.get("name")
+        load = gpu.get("load")
+        temp = gpu.get("temp")
+        if name and (load is not None or temp is not None):
+            self.gpu_seen = True
+            self.gpu_name = name
+            if temp is not None:
+                self.max_gpu_temp = max(self.max_gpu_temp or 0.0, temp)
+            parts = [name]
+            if load is not None:
+                parts.append(f"нагрузка {load:.0f}%")
+            if temp is not None:
+                parts.append(f"{temp:.0f} °C")
+            self.gpu_label.setText("GPU: " + " · ".join(parts))
+        elif self.gpu_seen and not self.gpu_dropped:
+            self.gpu_dropped = True
+            self.gpu_label.setText(f"GPU: ⚠ {self.gpu_name or 'видеоядро'} — ПЕРЕСТАЛ ОТВЕЧАТЬ ПОД НАГРУЗКОЙ")
 
     def stop_test(self, aborted):
         self.timer.stop()
@@ -310,9 +356,26 @@ class StressPage(BaseTestPage):
         else:
             temp_note = "температура: датчик недоступен"
             self.grade = "ok"
+        if self.gpu_dropped:
+            gpu_note = f"GPU ({self.gpu_name or 'видеоядро'}) ОТКЛЮЧИЛСЯ под нагрузкой"
+            summary_parts.append("⚠ GPU отвалился")
+            self.grade = "bad"
+        elif self.gpu_seen:
+            gpu_note = f"GPU {self.gpu_name}: стабилен" + (
+                f", макс. {self.max_gpu_temp:.0f} °C" if self.max_gpu_temp else "")
+            if self.max_gpu_temp and temperature_grade(self.max_gpu_temp) == "bad" and self.grade != "bad":
+                self.grade = "warn"
+        else:
+            gpu_note = "GPU: датчик недоступен"
         self.summary = " · ".join(summary_parts)
-        parts = [f"{DURATION} с без сбоев", load_note, temp_note]
-        self.auto_ok(", ".join(part for part in parts if part))
+        parts = [f"{DURATION} с без сбоев", load_note, temp_note, gpu_note]
+        details = ", ".join(part for part in parts if part)
+        if self.gpu_dropped:
+            self.details = details
+            self.set_status("КРИТИЧНО: GPU отключился под нагрузкой", False)
+            self.finish("Проблема: GPU отвалился", advance=False)
+        else:
+            self.auto_ok(details)
 
     def on_leave(self):
         if self.engine is not None:

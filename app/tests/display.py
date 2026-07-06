@@ -1,5 +1,5 @@
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QPainter
+from PyQt6.QtGui import QColor, QLinearGradient, QPainter
 from PyQt6.QtWidgets import QLabel, QPushButton, QWidget
 
 from app.tests.base import BaseTestPage
@@ -7,12 +7,17 @@ from app.tests.base import BaseTestPage
 
 class ColorScreen(QWidget):
     finished = pyqtSignal(int, int)
-    COLORS = [
-        (QColor("#FFFFFF"), "Белый"),
-        (QColor("#000000"), "Черный"),
-        (QColor("#FF0000"), "Красный"),
-        (QColor("#00FF00"), "Зеленый"),
-        (QColor("#0000FF"), "Синий"),
+    PATTERNS = [
+        ("solid", "#FFFFFF", "Белый"),
+        ("solid", "#000000", "Чёрный"),
+        ("solid", "#FF0000", "Красный (субпиксель R)"),
+        ("solid", "#00FF00", "Зелёный (субпиксель G)"),
+        ("solid", "#0000FF", "Синий (субпиксель B)"),
+        ("solid", "#00FFFF", "Голубой"),
+        ("solid", "#FF00FF", "Пурпурный"),
+        ("solid", "#FFFF00", "Жёлтый"),
+        ("solid", "#808080", "Серый 50%"),
+        ("gradient", None, "Градиент (полосы/зоны, засветы)"),
     ]
 
     def __init__(self):
@@ -25,14 +30,21 @@ class ColorScreen(QWidget):
 
     def paintEvent(self, e):
         painter = QPainter(self)
-        color, name = self.COLORS[self.index]
-        painter.fillRect(self.rect(), color)
+        kind, data, name = self.PATTERNS[self.index]
+        if kind == "solid":
+            painter.fillRect(self.rect(), QColor(data))
+        else:
+            gradient = QLinearGradient(0, 0, self.width(), 0)
+            gradient.setColorAt(0.0, QColor("#000000"))
+            gradient.setColorAt(1.0, QColor("#ffffff"))
+            painter.fillRect(self.rect(), gradient)
         painter.setPen(QColor(128, 128, 128))
         painter.drawText(20, self.height() - 20,
-                         f"{name} ({self.index + 1}/{len(self.COLORS)}) — клик: следующий цвет, Esc: выход")
+                         f"{name} ({self.index + 1}/{len(self.PATTERNS)}) — "
+                         "клик/пробел: далее, Esc: выход. Ищите точки другого цвета (битые пиксели).")
 
     def advance(self):
-        if self.index + 1 >= len(self.COLORS):
+        if self.index + 1 >= len(self.PATTERNS):
             self.close()
             return
         self.index += 1
@@ -51,20 +63,22 @@ class ColorScreen(QWidget):
     def closeEvent(self, e):
         if not self._emitted:
             self._emitted = True
-            self.finished.emit(self.max_seen, len(self.COLORS))
+            self.finished.emit(self.max_seen, len(self.PATTERNS))
         super().closeEvent(e)
 
 
 class DisplayPage(BaseTestPage):
-    title = "Матрица"
-    hint = "Кликните для перехода в полноэкранный режим. Переключайте цвета кликом. Выход — Esc."
+    title = "Матрица (битые пиксели)"
+    hint = ("Полноэкранный тест матрицы: переключайте заливки и ищите точки другого цвета "
+            "(битые/залипшие пиксели), полосы, засветы. Клик/пробел — далее, Esc — выход.")
 
     def build_body(self):
         self.launch_button = QPushButton("Запустить полноэкранный тест матрицы")
         self.launch_button.setMinimumHeight(56)
         self.launch_button.clicked.connect(self.launch)
-        info = QLabel("Цвета: Белый → Черный → Красный → Зеленый → Синий")
+        info = QLabel("Заливки: Белый · Чёрный · R · G · B · Голубой · Пурпурный · Жёлтый · Серый · Градиент")
         info.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        info.setWordWrap(True)
         self.body.addStretch(1)
         self.body.addWidget(self.launch_button)
         self.body.addWidget(info)
@@ -79,7 +93,9 @@ class DisplayPage(BaseTestPage):
     def on_screen_done(self, seen, total):
         self.screen_widget = None
         if seen >= total:
-            self.auto_ok(f"показаны все {total} цветов")
+            self.summary = "все заливки показаны"
+            self.auto_ok(f"показаны все {total} заливок (битые пиксели проверены)")
         else:
-            self.details = f"показано цветов: {seen}/{total}"
-            self.set_status(f"показано цветов: {seen} из {total}", "warn")
+            self.details = f"показано заливок: {seen}/{total}"
+            self.summary = f"показано {seen}/{total}"
+            self.set_status(f"показано заливок: {seen} из {total}", "warn")
