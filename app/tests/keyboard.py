@@ -1,10 +1,16 @@
 from PyQt6.QtCore import QEvent, Qt
 from PyQt6.QtWidgets import QHBoxLayout, QLabel
 
+from app import theme
 from app.tests.base import BaseTestPage
 
-KEY_STYLE = "background:#1a222c;border:1px solid #2c3947;border-radius:4px;color:#8fa1b3;"
 KEY_STYLE_OK = "background:#1e7e34;border:1px solid #27ae4b;border-radius:4px;color:#ffffff;font-weight:600;"
+
+
+def key_style():
+    c = theme.current()
+    return (f"background:{c['key_bg']};border:1px solid {c['canvas_border']};"
+            f"border-radius:4px;color:{c['key_text']};")
 
 KEY_ROWS = [
     [("Esc", 1), ("F1", 59), ("F2", 60), ("F3", 61), ("F4", 62), ("F5", 63), ("F6", 64),
@@ -54,7 +60,7 @@ class KeyboardPage(BaseTestPage):
             for label, scan in row:
                 cell = QLabel(label)
                 cell.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                cell.setStyleSheet(KEY_STYLE)
+                cell.setStyleSheet(key_style())
                 cell.setFixedHeight(34)
                 cell.setMinimumWidth(28 + 8 * len(label))
                 line.addWidget(cell, 4 if label == "Space" else 1)
@@ -80,8 +86,12 @@ class KeyboardPage(BaseTestPage):
     def reset_state(self):
         self.pressed.clear()
         for cell in self.cells.values():
-            cell.setStyleSheet(KEY_STYLE)
+            cell.setStyleSheet(key_style())
         self.update_progress()
+
+    def retheme(self):
+        for key_id, cell in self.cells.items():
+            cell.setStyleSheet(KEY_STYLE_OK if key_id in self.pressed else key_style())
 
     def on_enter(self):
         self.grabKeyboard()

@@ -2,6 +2,12 @@ DARK = {
     "window_top": "#0e1219",
     "window_bottom": "#191f2b",
     "text": "#e6ebf2",
+    "canvas_bg": "#0f1216",
+    "canvas_grid": "#1b2027",
+    "canvas_border": "#2b323b",
+    "canvas_text": "#8b95a1",
+    "key_bg": "#1a222c",
+    "key_text": "#8fa1b3",
     "glass": "#1a2130",
     "glass_strong": "#232c3d",
     "glass_border": "rgba(255,255,255,0.08)",
@@ -46,6 +52,12 @@ LIGHT = {
     "window_top": "#f4f7fc",
     "window_bottom": "#e0e8f1",
     "text": "#1b2230",
+    "canvas_bg": "#eef2f7",
+    "canvas_grid": "#d8dee8",
+    "canvas_border": "#cdd5df",
+    "canvas_text": "#5c6572",
+    "key_bg": "#e6ebf2",
+    "key_text": "#5c6572",
     "glass": "#ffffff",
     "glass_strong": "#eef2f8",
     "glass_border": "rgba(0,0,0,0.07)",
@@ -88,9 +100,20 @@ LIGHT = {
 
 THEMES = {"dark": DARK, "light": LIGHT}
 
+_current = "dark"
+
 
 def colors(name):
     return THEMES.get(name, DARK)
+
+
+def set_current(name):
+    global _current
+    _current = name if name in THEMES else "dark"
+
+
+def current():
+    return THEMES.get(_current, DARK)
 
 
 def stylesheet(name):

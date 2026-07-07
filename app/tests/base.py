@@ -55,6 +55,9 @@ class BaseTestPage(QWidget):
     def build_body(self):
         pass
 
+    def retheme(self):
+        self.update()
+
     def reset_state(self):
         pass
 

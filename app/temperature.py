@@ -87,7 +87,6 @@ def read_gpu():
     if not _init():
         return None
     computer = _state["computer"]
-    sensor_type = _state["sensor_type"]
     try:
         for hardware in computer.Hardware:
             if "gpu" not in str(hardware.HardwareType).lower():

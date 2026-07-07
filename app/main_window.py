@@ -11,7 +11,7 @@ from app.resources import resource_path
 from app.sysinfo import SpecsWorker
 from app.tests import PAGE_CLASSES
 from app.tests.base import BaseTestPage
-from app.theme import colors, stylesheet
+from app.theme import colors, set_current, stylesheet
 from app.updater import VERSION, UpdateChecker, UpdateDownloader, can_update, is_configured
 
 
@@ -19,6 +19,7 @@ class MainWindow(QMainWindow):
     def __init__(self, theme_name="dark"):
         super().__init__()
         self.theme_name = theme_name if theme_name in ("dark", "light") else "dark"
+        set_current(self.theme_name)
         self.setWindowTitle("SCAA — Service Com Auto Analyze")
         self.resize(1200, 760)
         self.specs = {"model": "определяется...", "cpu": "определяется...",
@@ -132,11 +133,12 @@ class MainWindow(QMainWindow):
         brand_box.setSpacing(0)
         brand = QLabel("SCAA")
         brand.setObjectName("brandLabel")
-        sub = QLabel("Service Com Auto Analyze · диагностика ПК, ноутбуков и моноблоков")
+        sub = QLabel("Service Com Auto Analyze")
         sub.setObjectName("brandSub")
         brand_box.addWidget(brand)
         brand_box.addWidget(sub)
         layout.addLayout(brand_box)
+        layout.addSpacing(24)
         layout.addStretch(1)
         grid = QGridLayout()
         grid.setHorizontalSpacing(18)
@@ -193,10 +195,13 @@ class MainWindow(QMainWindow):
 
     def toggle_theme(self):
         self.theme_name = "light" if self.theme_name == "dark" else "dark"
+        set_current(self.theme_name)
         QApplication.instance().setStyleSheet(stylesheet(self.theme_name))
         self._update_theme_button()
         self.report_page.set_colors(colors(self.theme_name))
         self._refresh_item_colors()
+        for page in self.pages:
+            page.retheme()
         data = config.load()
         data["theme"] = self.theme_name
         config.save(data)
@@ -214,10 +219,9 @@ class MainWindow(QMainWindow):
     @staticmethod
     def _set_spec(label, text):
         text = text or "н/д"
-        metrics = label.fontMetrics()
-        elided = metrics.elidedText(text, Qt.TextElideMode.ElideRight, label.maximumWidth() - 6)
-        label.setText(elided)
-        label.setToolTip(text if elided != text else "")
+        short = text if len(text) <= 30 else text[:29] + "…"
+        label.setText(short)
+        label.setToolTip(text if short != text else "")
 
     def _build_footer(self):
         footer = QHBoxLayout()

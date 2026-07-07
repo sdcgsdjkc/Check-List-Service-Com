@@ -10,6 +10,7 @@ from PyQt6.QtCore import QPointF, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QPen, QPolygonF
 from PyQt6.QtWidgets import QLabel, QListWidget, QProgressBar, QWidget
 
+from app import theme
 from app.norms import power_on_hours_grade, read_speed_grade, smart_grade
 from app.sysinfo import _powershell
 from app.tests.base import BaseTestPage
@@ -36,12 +37,13 @@ class SpeedGraph(QWidget):
         self.update()
 
     def paintEvent(self, event):
+        c = theme.current()
         painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor("#0f1216"))
+        painter.fillRect(self.rect(), QColor(c["canvas_bg"]))
         w, h = self.width(), self.height()
         peak = max(self.samples) if self.samples else 1.0
         peak = max(peak, 1.0)
-        painter.setPen(QColor("#1b2027"))
+        painter.setPen(QColor(c["canvas_grid"]))
         for frac in (0.25, 0.5, 0.75):
             y = int(h * frac)
             painter.drawLine(0, y, w, y)
@@ -63,9 +65,9 @@ class SpeedGraph(QWidget):
                     if s < self.slow_threshold:
                         painter.drawEllipse(QPointF(i * step, h - s / peak * (h - 8) - 4), 3, 3)
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.setPen(QColor("#8b95a1"))
+        painter.setPen(QColor(c["canvas_text"]))
         painter.drawText(8, 16, f"пик {peak:.0f} МБ/с")
-        painter.setPen(QColor("#2c3947"))
+        painter.setPen(QColor(c["canvas_border"]))
         painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
 
 

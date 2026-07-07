@@ -4,8 +4,9 @@ from collections import deque
 import psutil
 from PyQt6.QtCore import QPointF, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QPen, QPolygonF
-from PyQt6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
 
+from app import theme
 from app.norms import temperature_grade
 from app.sysinfo import read_temperature
 from app.temperature import read_gpu
@@ -100,12 +101,13 @@ class GpuFallbackWidget(QWidget):
         self.update()
 
     def paintEvent(self, event):
+        c = theme.current()
         painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor("#0f1216"))
-        painter.setPen(QColor("#2b323b"))
+        painter.fillRect(self.rect(), QColor(c["canvas_bg"]))
+        painter.setPen(QColor(c["canvas_border"]))
         painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
         if not self.active:
-            painter.setPen(QColor("#565f69"))
+            painter.setPen(QColor(c["canvas_text"]))
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "GPU (в покое)")
             return
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -165,10 +167,11 @@ class TempGraph(QWidget):
         self.update()
 
     def paintEvent(self, event):
+        c = theme.current()
         painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor("#0f1216"))
+        painter.fillRect(self.rect(), QColor(c["canvas_bg"]))
         w, h = self.width(), self.height()
-        painter.setPen(QColor("#1b2027"))
+        painter.setPen(QColor(c["canvas_grid"]))
         for frac in (0.25, 0.5, 0.75):
             y = int(h * frac)
             painter.drawLine(0, y, w, y)
@@ -188,7 +191,7 @@ class TempGraph(QWidget):
         painter.drawText(8, 16, "— нагрузка CPU, %")
         painter.setPen(QColor("#ef5350"))
         painter.drawText(8, 32, "— температура, °C")
-        painter.setPen(QColor("#2b323b"))
+        painter.setPen(QColor(c["canvas_border"]))
         painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
 
 

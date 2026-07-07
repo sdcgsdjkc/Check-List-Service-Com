@@ -1,7 +1,8 @@
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter
 from PyQt6.QtWidgets import QApplication, QHBoxLayout, QLabel, QPushButton, QWidget
 
+from app import theme
 from app.tests.base import BaseTestPage
 from app.touchpad_hid import TouchpadTracker, is_supported
 
@@ -41,8 +42,9 @@ class TouchZone(QWidget):
                    int(e.position().y() * self.ROWS / self.height()))
 
     def paintEvent(self, e):
+        c = theme.current()
         painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor("#0d1117"))
+        painter.fillRect(self.rect(), QColor(c["canvas_bg"]))
         cell_w = self.width() / self.COLS
         cell_h = self.height() / self.ROWS
         painter.setPen(Qt.PenStyle.NoPen)
@@ -50,14 +52,14 @@ class TouchZone(QWidget):
         for col, row in self.visited:
             painter.drawRect(int(col * cell_w), int(row * cell_h), int(cell_w) + 1, int(cell_h) + 1)
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.setPen(QColor("#22303f"))
+        painter.setPen(QColor(c["canvas_grid"]))
         for i in range(1, self.COLS):
             x = int(i * cell_w)
             painter.drawLine(x, 0, x, self.height())
         for i in range(1, self.ROWS):
             y = int(i * cell_h)
             painter.drawLine(0, y, self.width(), y)
-        painter.setPen(QColor("#2c3947"))
+        painter.setPen(QColor(c["canvas_border"]))
         painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
 
 
