@@ -1,19 +1,169 @@
+import ctypes
 import json
 import os
 import shutil
 import sys
 import tempfile
 import time
+from ctypes import wintypes
 
 import psutil
 from PyQt6.QtCore import QPointF, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QPen, QPolygonF
-from PyQt6.QtWidgets import QLabel, QListWidget, QProgressBar, QWidget
+from PyQt6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QListWidget, QProgressBar, QPushButton, QWidget
 
 from app import theme
 from app.norms import power_on_hours_grade, read_speed_grade, smart_grade
-from app.sysinfo import _powershell
+from app.sysinfo import _powershell, list_physical_disks
 from app.tests.base import BaseTestPage
+
+SURFACE_BLOCK = 1024 * 1024
+SURFACE_LEVELS = [
+    ("excellent", 8, "#7f8c99", "< 8 мс"),
+    ("good", 20, "#57c06a", "< 20 мс"),
+    ("slow", 50, "#e0a33a", "< 50 мс"),
+    ("bad", 150, "#e0554f", "< 150 мс"),
+    ("verybad", float("inf"), "#4a6cf0", "≥ 150 мс"),
+]
+SURFACE_COLOR = {name: color for name, _, color, _ in SURFACE_LEVELS}
+SURFACE_COLOR["err"] = "#b01515"
+SURFACE_RANK = {"excellent": 0, "good": 1, "slow": 2, "bad": 3, "verybad": 4, "err": 5}
+
+
+def surface_grade(ms, error):
+    if error:
+        return "err"
+    for name, limit, _, _ in SURFACE_LEVELS:
+        if ms < limit:
+            return name
+    return "verybad"
+
+
+class BlockMap(QWidget):
+    CELL = 13
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.grades = []
+        self.setMinimumHeight(230)
+
+    def reset(self):
+        self.grades = []
+        self.update()
+
+    def add(self, ms, error):
+        self.grades.append(surface_grade(ms, error))
+        self.update()
+
+    def paintEvent(self, event):
+        c = theme.current()
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), QColor(c["canvas_bg"]))
+        w, h = self.width(), self.height()
+        cell = self.CELL
+        cols = max(1, (w - 4) // cell)
+        rows = max(1, (h - 4) // cell)
+        capacity = cols * rows
+        grades = self.grades
+        if grades and len(grades) > capacity:
+            bucket = len(grades) / capacity
+            reduced = []
+            for i in range(capacity):
+                chunk = grades[int(i * bucket):int((i + 1) * bucket)] or [grades[min(len(grades) - 1, int(i * bucket))]]
+                reduced.append(max(chunk, key=lambda g: SURFACE_RANK[g]))
+            grades = reduced
+        painter.setPen(Qt.PenStyle.NoPen)
+        for i, grade in enumerate(grades):
+            col = i % cols
+            row = i // cols
+            painter.setBrush(QColor(SURFACE_COLOR[grade]))
+            painter.drawRect(2 + col * cell, 2 + row * cell, cell - 2, cell - 2)
+        painter.setPen(QColor(c["canvas_border"]))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
+
+
+class SurfaceWorker(QThread):
+    block = pyqtSignal(float, bool)
+    progress = pyqtSignal(int)
+    speed = pyqtSignal(float)
+    done = pyqtSignal(object)
+
+    def __init__(self, path, size, time_limit, parent=None):
+        super().__init__(parent)
+        self.path = path
+        self.size = size
+        self.time_limit = time_limit
+        self._abort = False
+
+    def stop(self):
+        self._abort = True
+        self.wait(8000)
+
+    def run(self):
+        if sys.platform != "win32":
+            self.done.emit({"error": "посекторное чтение доступно только на Windows"})
+            return
+        kernel = ctypes.windll.kernel32
+        kernel.CreateFileW.restype = wintypes.HANDLE
+        kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                       wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+        handle = kernel.CreateFileW(self.path, 0x80000000, 0x1 | 0x2, None, 3, 0, None)
+        if handle == wintypes.HANDLE(-1).value or not handle:
+            self.done.emit({"error": "не удалось открыть диск (нужны права администратора)"})
+            return
+        kernel.SetFilePointerEx.argtypes = [wintypes.HANDLE, ctypes.c_longlong,
+                                            ctypes.POINTER(ctypes.c_longlong), wintypes.DWORD]
+        buffer = ctypes.create_string_buffer(SURFACE_BLOCK)
+        read_bytes = wintypes.DWORD(0)
+        counts = {name: 0 for name in SURFACE_RANK}
+        total = self.size if self.size and self.size > 0 else 0
+        blocks_total = max(1, total // SURFACE_BLOCK) if total else 0
+        worst = 0.0
+        done_blocks = 0
+        pos = 0
+        start = time.perf_counter()
+        win_bytes = 0
+        win_start = start
+        try:
+            while not self._abort:
+                if total and pos >= total:
+                    break
+                if self.time_limit and (time.perf_counter() - start) >= self.time_limit:
+                    break
+                t0 = time.perf_counter()
+                ok = kernel.ReadFile(handle, buffer, SURFACE_BLOCK, ctypes.byref(read_bytes), None)
+                dt_ms = (time.perf_counter() - t0) * 1000.0
+                error = (not ok) or read_bytes.value == 0
+                grade = surface_grade(dt_ms, error)
+                counts[grade] += 1
+                self.block.emit(dt_ms, error)
+                if error:
+                    new_pos = ctypes.c_longlong(0)
+                    kernel.SetFilePointerEx(handle, ctypes.c_longlong(pos + SURFACE_BLOCK),
+                                            ctypes.byref(new_pos), 0)
+                else:
+                    worst = max(worst, dt_ms)
+                    win_bytes += read_bytes.value
+                pos += SURFACE_BLOCK
+                done_blocks += 1
+                now = time.perf_counter()
+                if now - win_start >= 0.4:
+                    self.speed.emit(win_bytes / (1024 * 1024) / (now - win_start))
+                    win_bytes = 0
+                    win_start = now
+                if blocks_total:
+                    self.progress.emit(min(100, int(done_blocks * 100 / blocks_total)))
+                if not error and read_bytes.value < SURFACE_BLOCK:
+                    break
+            elapsed = time.perf_counter() - start
+            self.done.emit({"counts": counts, "worst_ms": round(worst),
+                            "elapsed": round(elapsed), "blocks": done_blocks,
+                            "scanned_gb": done_blocks * SURFACE_BLOCK / 1024 ** 3})
+        except Exception as exc:
+            self.done.emit({"error": str(exc)})
+        finally:
+            kernel.CloseHandle(handle)
 
 
 class SpeedGraph(QWidget):
@@ -220,17 +370,44 @@ class StoragePage(BaseTestPage):
         self.busy.setRange(0, 0)
         self.busy.hide()
         self.info = QLabel("Проверка не запускалась")
+        controls = QHBoxLayout()
+        controls.addWidget(QLabel("Диск:"))
+        self.disk_combo = QComboBox()
+        controls.addWidget(self.disk_combo, 1)
+        self.quick_button = QPushButton("Быстрый скан (3 мин)")
+        self.quick_button.clicked.connect(lambda: self.start_surface(180))
+        self.full_button = QPushButton("Полный проход")
+        self.full_button.clicked.connect(lambda: self.start_surface(None))
+        self.stop_button = QPushButton("Стоп")
+        self.stop_button.setObjectName("failButton")
+        self.stop_button.clicked.connect(self.stop_surface)
+        self.stop_button.hide()
+        controls.addWidget(self.quick_button)
+        controls.addWidget(self.full_button)
+        controls.addWidget(self.stop_button)
         self.speed_label = QLabel("Скорость: —")
         self.speed_label.setObjectName("bigValue")
+        self.blockmap = BlockMap()
         self.graph = SpeedGraph()
+        self.graph.hide()
+        self.legend = QLabel(self._legend_html())
+        self.legend.setObjectName("specLabel")
         self.disk_list = QListWidget()
+        self.disk_list.setMaximumHeight(120)
         self.body.addWidget(self.busy)
         self.body.addWidget(self.info)
+        self.body.addLayout(controls)
         self.body.addWidget(self.speed_label)
-        self.body.addWidget(self.graph)
-        self.body.addWidget(self.disk_list, 1)
+        self.body.addWidget(self.blockmap, 1)
+        self.body.addWidget(self.graph, 1)
+        self.body.addWidget(self.legend)
+        self.body.addWidget(self.disk_list)
         self.worker = None
         self.speed_worker = None
+        self.surface_worker = None
+        self.disks = []
+        self._auto_quick = False
+        self._smart_done = False
         self.health_summary = ""
         self.healthy = True
         self.auto_pass = True
@@ -239,28 +416,147 @@ class StoragePage(BaseTestPage):
         self.advance_timer = QTimer(self)
         self.advance_timer.timeout.connect(self._countdown_tick)
 
+    @staticmethod
+    def _legend_html():
+        parts = [(SURFACE_COLOR["excellent"], "отлично"), (SURFACE_COLOR["good"], "норма"),
+                 (SURFACE_COLOR["slow"], "медленно"), (SURFACE_COLOR["bad"], "проблема"),
+                 (SURFACE_COLOR["verybad"], "оч. медленно"), (SURFACE_COLOR["err"], "бэд-блок")]
+        return "&nbsp;&nbsp;".join(f"<span style='color:{c}'>■</span> {t}" for c, t in parts)
+
     def reset_state(self):
         self.advance_timer.stop()
         self.countdown = 0
         self.disk_list.clear()
+        self.blockmap.reset()
         self.graph.reset()
+        self.graph.hide()
+        self.blockmap.show()
         self.busy.hide()
+        self.stop_button.hide()
+        self.quick_button.setEnabled(True)
+        self.full_button.setEnabled(True)
         self.info.setText("Проверка не запускалась")
         self.speed_label.setText("Скорость: —")
         self.health_summary = ""
         self.healthy = True
         self.auto_pass = True
         self.smart_grade = "ok"
+        self._auto_quick = False
+        self._smart_done = False
 
     def on_enter(self):
-        if self.worker is not None:
+        if self.worker is not None or self.surface_worker is not None:
             return
         self.busy.show()
-        self.info.setText("Чтение состояния накопителей...")
-        self.set_status("идет проверка...")
+        self.info.setText("Чтение состояния накопителей (S.M.A.R.T.)...")
+        self.set_status("идет проверка S.M.A.R.T. ...")
         self.worker = StorageWorker(self)
         self.worker.done.connect(self.on_done)
         self.worker.start()
+
+    def auto_start(self):
+        self._auto_quick = True
+        if self._smart_done:
+            self.start_surface(180)
+
+    def _populate_disks(self):
+        self.disks = list_physical_disks()
+        self.disk_combo.clear()
+        for disk in self.disks:
+            label = f"{disk['model']} — {disk['size'] / 1024 ** 3:.0f} ГБ"
+            if disk["is_system"]:
+                label += " (системный)"
+            self.disk_combo.addItem(label)
+
+    def _smart_ready(self):
+        self._smart_done = True
+        self.busy.hide()
+        self._populate_disks()
+        if self._auto_quick:
+            self.start_surface(180)
+        elif self.disks:
+            self.set_status("выберите режим скана поверхности или отметьте тест вручную")
+        else:
+            self.set_status("физические диски не найдены (нужны права администратора)", "warn")
+
+    def start_surface(self, time_limit):
+        if not self.disks:
+            self.set_status("физические диски не найдены (нужны права администратора)", "warn")
+            return
+        index = max(0, self.disk_combo.currentIndex())
+        disk = self.disks[index]
+        self.blockmap.reset()
+        self.blockmap.show()
+        self.graph.hide()
+        self.busy.setRange(0, 100)
+        self.busy.setValue(0)
+        self.busy.show()
+        self.quick_button.setEnabled(False)
+        self.full_button.setEnabled(False)
+        self.stop_button.show()
+        mode = "быстрый, 3 мин" if time_limit else "полный проход"
+        self.info.setText(f"Скан поверхности [{mode}]: {disk['model']}")
+        self.set_status("идет посекторное чтение поверхности...")
+        self.surface_worker = SurfaceWorker(disk["path"], disk["size"], time_limit, self)
+        self.surface_worker.block.connect(self.blockmap.add)
+        self.surface_worker.speed.connect(self.on_surface_speed)
+        self.surface_worker.progress.connect(self.busy.setValue)
+        self.surface_worker.done.connect(self.on_surface_done)
+        self.surface_worker.start()
+
+    def stop_surface(self):
+        if self.surface_worker is not None and self.surface_worker.isRunning():
+            self.surface_worker.stop()
+
+    def on_surface_speed(self, mbps):
+        self.speed_label.setText(f"Текущая скорость: {mbps:.0f} МБ/с")
+
+    def on_surface_done(self, result):
+        self.busy.hide()
+        self.stop_button.hide()
+        self.quick_button.setEnabled(True)
+        self.full_button.setEnabled(True)
+        self.surface_worker = None
+        if "error" in result:
+            self.disk_list.addItem(f"Скан поверхности недоступен: {result['error']}")
+            self.speed_label.setText("Посекторный скан недоступен — обычный замер скорости")
+            self.blockmap.hide()
+            self.graph.show()
+            self.start_speed_test()
+            return
+        counts = result["counts"]
+        good = counts["excellent"] + counts["good"]
+        problem = counts["bad"] + counts["verybad"] + counts["err"]
+        stats = (f"проверено {result['scanned_gb']:.1f} ГБ за {result['elapsed']} с · "
+                 f"норма {good} · медленно {counts['slow']} · "
+                 f"проблемных {problem} · бэдов {counts['err']} · макс. {result['worst_ms']} мс")
+        self.disk_list.addItem(f"Скан поверхности: {stats}")
+        if counts["err"] > 0 or counts["verybad"] > 0 or counts["bad"] > 5:
+            surface_grade_name = "bad"
+            zone = "бэд-блоки / провалы — диск деградирует"
+        elif counts["slow"] > 50 or counts["bad"] > 0:
+            surface_grade_name = "warn"
+            zone = "есть медленные зоны"
+        else:
+            surface_grade_name = "ok"
+            zone = "поверхность в норме"
+        rank = {"ok": 0, "warn": 1, "bad": 2}
+        self.grade = max([self.smart_grade, surface_grade_name], key=lambda g: rank.get(g, 1))
+        self.summary = " · ".join(part for part in [
+            (self.health_summary.split(";")[0] if self.health_summary else ""), zone] if part)
+        combined = "; ".join(part for part in [self.health_summary, stats] if part)
+        if self.grade == "bad":
+            self.details = combined
+            self.set_status(f"КРИТИЧНО: {zone}", False)
+            self.finish("Не пройден", advance=False)
+        elif self.healthy:
+            self.auto_ok(combined, advance=False)
+            self.countdown = 10
+            self.advance_timer.start(1000)
+            self._countdown_tick(initial=True)
+        else:
+            self.details = combined
+            self.set_status("проверьте состояние S.M.A.R.T. вручную", "warn")
 
     def start_speed_test(self):
         self.busy.setRange(0, 100)
@@ -353,6 +649,8 @@ class StoragePage(BaseTestPage):
 
     def on_leave(self):
         self.advance_timer.stop()
+        if self.surface_worker is not None and self.surface_worker.isRunning():
+            self.surface_worker.stop()
         if self.speed_worker is not None and self.speed_worker.isRunning():
             self.speed_worker.stop()
         if self.worker is not None and self.worker.isRunning():
@@ -369,12 +667,12 @@ class StoragePage(BaseTestPage):
         return self.MEDIA.get(value, "Накопитель")
 
     def on_done(self, data):
-        self.busy.hide()
+        self.worker = None
         if data is None:
-            self.info.setText("S.M.A.R.T. недоступен, выполняется только замер скорости")
+            self.info.setText("S.M.A.R.T. недоступен")
             self.health_summary = "S.M.A.R.T. недоступен"
             self.auto_pass = False
-            self.start_speed_test()
+            self._smart_ready()
             return
         if isinstance(data, dict) and "fallback" in data:
             for disk in data["fallback"]:
@@ -382,7 +680,7 @@ class StoragePage(BaseTestPage):
             self.info.setText("S.M.A.R.T. недоступен, показаны только разделы")
             self.health_summary = "S.M.A.R.T. недоступен"
             self.auto_pass = False
-            self.start_speed_test()
+            self._smart_ready()
             return
         if not data:
             self.info.setText("Накопители не найдены")
@@ -425,4 +723,4 @@ class StoragePage(BaseTestPage):
         self.health_summary = "; ".join(summary)
         self.healthy = healthy
         self.smart_grade = worst_grade
-        self.start_speed_test()
+        self._smart_ready()

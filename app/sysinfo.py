@@ -128,6 +128,42 @@ def collect_battery():
     return f"{wear:.0f}%", note
 
 
+def list_physical_disks():
+    if sys.platform != "win32":
+        return []
+    system_index = None
+    try:
+        raw = _powershell("(Get-Partition -DriveLetter C -ErrorAction Stop | Get-Disk).Number")
+        if raw.strip():
+            system_index = int(raw.strip())
+    except Exception:
+        system_index = None
+    disks = []
+    try:
+        raw = _powershell(
+            "Get-CimInstance Win32_DiskDrive | Select-Object Index, Model, Size | ConvertTo-Json")
+        data = json.loads(raw) if raw else []
+        if isinstance(data, dict):
+            data = [data]
+        for item in data:
+            index = int(item.get("Index"))
+            size = int(item.get("Size") or 0)
+            model = (item.get("Model") or f"Диск {index}").strip()
+            disks.append({
+                "index": index,
+                "model": model,
+                "size": size,
+                "path": f"\\\\.\\PhysicalDrive{index}",
+                "is_system": (index == system_index),
+            })
+    except Exception:
+        return []
+    if system_index is None and disks:
+        disks[0]["is_system"] = True
+    disks.sort(key=lambda d: (not d["is_system"], d["index"]))
+    return disks
+
+
 CHASSIS_TYPES = {
     3: "ПК", 4: "ПК", 5: "ПК", 6: "ПК", 7: "ПК", 15: "ПК", 16: "ПК", 35: "ПК",
     8: "Ноутбук", 9: "Ноутбук", 10: "Ноутбук", 14: "Ноутбук", 30: "Планшет",
