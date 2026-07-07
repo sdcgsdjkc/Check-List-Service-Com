@@ -156,8 +156,9 @@ QPushButton:pressed {{ background: {c['accent']}; color: #ffffff; }}
 QListWidget {{ background: {c['list_bg']}; border: 1px solid {c['list_border']};
               border-radius: 16px; outline: none; padding: 6px; }}
 QListWidget::item {{ padding: 11px 10px; border-radius: 10px; margin: 2px 2px; }}
-QListWidget::item:selected {{ background: {c['list_sel_bg']}; color: {c['list_sel_text']}; }}
 QListWidget::item:hover {{ background: {c['glass_strong']}; }}
+QListWidget::item:selected {{ background: {c['list_sel_bg']}; color: {c['list_sel_text']}; }}
+QListWidget::item:selected:hover {{ background: {c['list_sel_bg']}; color: {c['list_sel_text']}; }}
 QLineEdit, QTextEdit {{ background: {c['input_bg']}; border: 1px solid {c['input_border']};
                        border-radius: 12px; padding: 8px 10px;
                        selection-background-color: {c['accent']}; }}
