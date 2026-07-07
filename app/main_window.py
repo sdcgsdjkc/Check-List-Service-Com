@@ -73,20 +73,19 @@ class MainWindow(QMainWindow):
     def on_update_found(self, info):
         if not info:
             return
+        notes = f"\n\nЧто нового:\n{info['notes']}" if info.get("notes") else ""
         if not can_update():
-            notes = f"\n\nЧто нового:\n{info['notes']}" if info.get("notes") else ""
             QMessageBox.information(
                 self, "Доступно обновление",
-                f"Доступна новая версия {info['version']} (у вас {VERSION}).\n"
+                f"Доступна новая версия {info['version']} (у вас {VERSION}).{notes}\n\n"
                 "Автообновление доступно только для собранной программы (.exe) — "
-                f"скачайте её со страницы релизов на GitHub.{notes}")
+                "скачайте её со страницы релизов на GitHub.")
             return
-        notes = f"\n\nЧто нового:\n{info['notes']}" if info.get("notes") else ""
         answer = QMessageBox.question(
             self, "Доступно обновление",
-            f"Доступна новая версия {info['version']} (у вас {VERSION}).\n\n"
-            "Программа скачает обновление, затем автоматически закроется и "
-            f"запустится заново уже обновлённой.\n\nОбновить сейчас?{notes}",
+            f"Доступна новая версия {info['version']} (у вас {VERSION}).{notes}\n\n"
+            "Программа скачает обновление, закроется и запустится заново уже обновлённой.\n\n"
+            "Обновить сейчас?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if answer != QMessageBox.StandardButton.Yes:
             return
