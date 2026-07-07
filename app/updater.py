@@ -100,18 +100,20 @@ def check():
 
 
 def _swap_and_relaunch(target, temp):
-    exe_name = os.path.basename(target)
-    pid = os.getpid()
     script = (
         "@echo off\r\n"
-        ":wait\r\n"
-        f'tasklist /FI "PID eq {pid}" 2>NUL | find /I "{exe_name}" >NUL\r\n'
-        "if not errorlevel 1 (\r\n"
-        "  ping -n 2 127.0.0.1 >NUL\r\n"
-        "  goto wait\r\n"
-        ")\r\n"
+        "ping -n 2 127.0.0.1 >NUL\r\n"
+        "set /a tries=0\r\n"
+        ":trymove\r\n"
         f'move /y "{temp}" "{target}" >NUL 2>&1\r\n'
+        f'if not exist "{temp}" goto done\r\n'
+        "set /a tries+=1\r\n"
+        "if %tries% GEQ 90 goto giveup\r\n"
+        "ping -n 2 127.0.0.1 >NUL\r\n"
+        "goto trymove\r\n"
+        ":done\r\n"
         f'start "" "{target}"\r\n'
+        ":giveup\r\n"
         'del "%~f0"\r\n'
     )
     bat = os.path.join(tempfile.gettempdir(), "scaa_update.bat")
