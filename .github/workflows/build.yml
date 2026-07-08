@@ -37,6 +37,9 @@ jobs:
           --collect-all pythonnet
           --collect-all clr_loader
           --collect-all certifi
+          --collect-all OpenGL
+          --hidden-import OpenGL.platform.win32
+          --exclude-module OpenGL.Tk
           main.py
 
       - name: Upload EXE to release

@@ -1,8 +1,39 @@
+import time
+
 import psutil
-from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtWidgets import QHBoxLayout, QLabel, QListWidget
 
 from app.tests.base import BaseTestPage
+
+
+class PortsWorker(QThread):
+    sample = pyqtSignal(object, object)  # battery, removable set (или None при ошибке)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._run = True
+
+    def stop(self):
+        self._run = False
+        self.wait(1500)
+
+    def run(self):
+        while self._run:
+            try:
+                battery = psutil.sensors_battery()
+            except Exception:
+                battery = None
+            try:
+                removable = {p.device for p in psutil.disk_partitions(all=False)
+                             if "removable" in p.opts.lower()}
+            except Exception:
+                removable = None
+            self.sample.emit(battery, removable)
+            for _ in range(7):
+                if not self._run:
+                    return
+                time.sleep(0.1)
 
 
 class PortsPage(BaseTestPage):
@@ -25,8 +56,7 @@ class PortsPage(BaseTestPage):
         self.known = None
         self.cycles = 0
         self.ac_seen = False
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.poll)
+        self.worker = None
 
     def reset_state(self):
         self.log.clear()
@@ -37,14 +67,19 @@ class PortsPage(BaseTestPage):
         self.ac_label.setText("Зарядка: —")
 
     def on_enter(self):
-        self.timer.start(700)
+        if self.worker is None:
+            self.worker = PortsWorker(self)
+            self.worker.sample.connect(self.on_sample)
+        if not self.worker.isRunning():
+            self.worker._run = True
+            self.worker.start()
         self.set_status("идет мониторинг портов и питания...")
 
     def on_leave(self):
-        self.timer.stop()
+        if self.worker is not None and self.worker.isRunning():
+            self.worker.stop()
 
-    def poll(self):
-        battery = psutil.sensors_battery()
+    def on_sample(self, battery, current):
         if battery is None:
             self.ac_label.setText("Питание: батарея не обнаружена")
             self.ac_label.setStyleSheet("color:#9aa7b4;")
@@ -55,10 +90,7 @@ class PortsPage(BaseTestPage):
         else:
             self.ac_label.setText(f"Зарядка: от батареи ({battery.percent:.0f}%)")
             self.ac_label.setStyleSheet("color:#ffb74d;font-weight:700;")
-        try:
-            current = {p.device for p in psutil.disk_partitions(all=False)
-                       if "removable" in p.opts.lower()}
-        except Exception:
+        if current is None:
             return
         if self.known is None:
             self.known = current

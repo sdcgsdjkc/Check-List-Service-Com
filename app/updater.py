@@ -108,12 +108,12 @@ def _swap_and_relaunch(target, temp):
         f'move /y "{temp}" "{target}" >NUL 2>&1\r\n'
         f'if not exist "{temp}" goto done\r\n'
         "set /a tries+=1\r\n"
-        "if %tries% GEQ 90 goto giveup\r\n"
+        "if %tries% GEQ 120 goto relaunch\r\n"
         "ping -n 2 127.0.0.1 >NUL\r\n"
         "goto trymove\r\n"
         ":done\r\n"
+        ":relaunch\r\n"
         f'start "" "{target}"\r\n'
-        ":giveup\r\n"
         'del "%~f0"\r\n'
     )
     bat = os.path.join(tempfile.gettempdir(), "scaa_update.bat")
@@ -151,6 +151,8 @@ class UpdateDownloader(QThread):
                         got += len(chunk)
                         if total:
                             self.progress.emit(min(100, int(got * 100 / total)))
+            if total and got != total:
+                raise ValueError(f"закачка оборвалась ({got} из {total} байт)")
             if got < 100000:
                 raise ValueError("загруженный файл повреждён")
             self.progress.emit(100)

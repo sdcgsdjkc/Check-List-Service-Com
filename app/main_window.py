@@ -111,6 +111,8 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self, "Обновление загружено",
             "Программа сейчас закроется и через пару секунд откроется заново — уже обновлённой.")
+        if self.update_downloader is not None:
+            self.update_downloader.wait(2000)
         QApplication.instance().quit()
 
     def _build_header(self):

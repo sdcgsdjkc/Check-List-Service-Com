@@ -78,6 +78,167 @@ class StressEngine:
         self.threads = []
 
 
+VERTEX_SHADER = (
+    "#version 330 core\n"
+    "void main() {\n"
+    "  vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));\n"
+    "  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);\n"
+    "}\n"
+)
+
+FRAGMENT_SHADER = (
+    "#version 330 core\n"
+    "uniform float uTime;\n"
+    "uniform vec2 uRes;\n"
+    "out vec4 fragColor;\n"
+    "void main() {\n"
+    "  vec2 uv = gl_FragCoord.xy / uRes;\n"
+    "  float v = 0.0;\n"
+    "  for (int i = 0; i < 500; i++) {\n"
+    "    float fi = float(i);\n"
+    "    v += sin(uv.x * 42.0 + uTime + fi) * cos(uv.y * 42.0 - uTime - fi);\n"
+    "    v = fract(v * 1.37 + 0.11);\n"
+    "  }\n"
+    "  fragColor = vec4(v, uv.x * 0.7 + v * 0.3, uv.y, 1.0);\n"
+    "}\n"
+)
+
+
+def make_gpu_widget():
+    try:
+        from PyQt6.QtOpenGLWidgets import QOpenGLWidget
+        from PyQt6.QtOpenGL import QOpenGLShader, QOpenGLShaderProgram, QOpenGLVertexArrayObject
+        from PyQt6.QtGui import QSurfaceFormat, QVector2D
+        from OpenGL.GL import (glClear, glClearColor, glDrawArrays, glViewport,
+                               GL_COLOR_BUFFER_BIT, GL_TRIANGLES)
+        try:
+            from OpenGL.GL import glGetGraphicsResetStatus, GL_NO_ERROR
+        except Exception:
+            glGetGraphicsResetStatus = None
+            GL_NO_ERROR = 0
+    except Exception:
+        return None
+
+    class GpuBurnWidget(QOpenGLWidget):
+        failed = pyqtSignal()
+        lost = pyqtSignal()
+
+        def __init__(self):
+            super().__init__()
+            self.setMinimumSize(300, 200)
+            self.active = False
+            self.dead = False
+            self.linked = False
+            self.frame = 0
+            self.program = None
+            self.vao = None
+            self.timer = QTimer(self)
+            self.timer.timeout.connect(self.update)
+
+        def initializeGL(self):
+            try:
+                ctx = self.context()
+                if ctx is None or not ctx.isValid():
+                    self._fail()
+                    return
+                major, minor = ctx.format().version()
+                if (major, minor) < (3, 2):
+                    self._fail()
+                    return
+                self.program = QOpenGLShaderProgram(self)
+                self.program.addShaderFromSourceCode(QOpenGLShader.ShaderTypeBit.Vertex, VERTEX_SHADER)
+                self.program.addShaderFromSourceCode(QOpenGLShader.ShaderTypeBit.Fragment, FRAGMENT_SHADER)
+                self.linked = self.program.link()
+                self.vao = QOpenGLVertexArrayObject(self)
+                self.vao.create()
+                if not self.linked or not self.vao.isCreated():
+                    self._fail()
+            except Exception:
+                self._fail()
+
+        def resizeGL(self, width, height):
+            try:
+                glViewport(0, 0, width, height)
+            except Exception:
+                pass
+
+        def paintGL(self):
+            if self.dead:
+                return
+            try:
+                ctx = self.context()
+                if ctx is None or not ctx.isValid():
+                    self._lost()
+                    return
+                if glGetGraphicsResetStatus is not None:
+                    try:
+                        if glGetGraphicsResetStatus() != GL_NO_ERROR:
+                            self._lost()
+                            return
+                    except Exception:
+                        pass
+                glClearColor(0.05, 0.06, 0.09, 1.0)
+                glClear(GL_COLOR_BUFFER_BIT)
+                if not (self.active and self.linked):
+                    return
+                self.program.bind()
+                self.program.setUniformValue1f(self.program.uniformLocation("uTime"), self.frame * 0.05)
+                self.program.setUniformValue(self.program.uniformLocation("uRes"),
+                                             QVector2D(float(self.width()), float(self.height())))
+                self.vao.bind()
+                glDrawArrays(GL_TRIANGLES, 0, 3)
+                self.vao.release()
+                self.program.release()
+                self.frame += 1
+            except Exception:
+                self._fail()
+
+        def _fail(self):
+            if self.dead:
+                return
+            self.dead = True
+            self.active = False
+            self.linked = False
+            self.timer.stop()
+            QTimer.singleShot(0, self.failed.emit)
+
+        def _lost(self):
+            if self.dead:
+                return
+            self.dead = True
+            self.active = False
+            self.linked = False
+            self.timer.stop()
+            QTimer.singleShot(0, self.lost.emit)
+
+        def start(self):
+            if self.dead:
+                return
+            self.active = True
+            self.frame = 0
+            self.timer.start(33)
+
+        def stop(self):
+            self.active = False
+            self.timer.stop()
+            if not self.dead:
+                self.update()
+
+    fmt = QSurfaceFormat()
+    fmt.setProfile(QSurfaceFormat.OpenGLContextProfile.CoreProfile)
+    fmt.setVersion(3, 3)
+    try:
+        fmt.setOption(QSurfaceFormat.FormatOption.ResetNotification)
+    except Exception:
+        pass
+    try:
+        widget = GpuBurnWidget()
+        widget.setFormat(fmt)
+        return widget
+    except Exception:
+        return None
+
+
 class GpuFallbackWidget(QWidget):
     def __init__(self):
         super().__init__()
@@ -218,7 +379,13 @@ class StressPage(BaseTestPage):
         self.vectors_label = QLabel("Векторы нагрузки: CPU-процессы + матрицы FP + пропускная способность ОЗУ + GPU-шейдер")
         self.vectors_label.setObjectName("specLabel")
         self.middle = QHBoxLayout()
-        self.gpu = GpuFallbackWidget()
+        self.gpu = make_gpu_widget()
+        self.gpu_shader = self.gpu is not None
+        if self.gpu is not None:
+            self.gpu.failed.connect(self._on_gpu_failed)
+            self.gpu.lost.connect(self._on_gpu_lost)
+        else:
+            self.gpu = GpuFallbackWidget()
         self.graph = TempGraph()
         self.middle.addWidget(self.gpu, 1)
         self.middle.addWidget(self.graph, 1)
@@ -239,6 +406,36 @@ class StressPage(BaseTestPage):
         self.monitor = None
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.tick)
+
+    def _swap_to_fallback(self):
+        was_active = getattr(self.gpu, "active", False)
+        old = self.gpu
+        fallback = GpuFallbackWidget()
+        self.middle.replaceWidget(old, fallback)
+        old.setParent(None)
+        old.deleteLater()
+        self.gpu = fallback
+        self.gpu_shader = False
+        return was_active
+
+    def _on_gpu_failed(self):
+        if isinstance(self.gpu, GpuFallbackWidget):
+            return
+        was_active = self._swap_to_fallback()
+        if was_active:
+            self.gpu.start()
+
+    def _on_gpu_lost(self):
+        # Контекст OpenGL потерян под нагрузкой — GPU перестал отвечать (TDR).
+        if isinstance(self.gpu, GpuFallbackWidget):
+            return
+        was_active = self._swap_to_fallback()
+        if was_active:
+            self.gpu.start()
+        if not self.gpu_dropped:
+            self.gpu_dropped = True
+            self.gpu_label.setText("GPU: ⚠ потеря контекста под нагрузкой (видеоядро перестало отвечать)")
+            self.set_status("GPU отвалился под нагрузкой (потеря контекста)", False)
 
     def reset_state(self):
         self.graph.clear()

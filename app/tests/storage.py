@@ -28,6 +28,8 @@ SURFACE_LEVELS = [
 SURFACE_COLOR = {name: color for name, _, color, _ in SURFACE_LEVELS}
 SURFACE_COLOR["err"] = "#b01515"
 SURFACE_RANK = {"excellent": 0, "good": 1, "slow": 2, "bad": 3, "verybad": 4, "err": 5}
+SURFACE_RANK_COLOR = [SURFACE_COLOR[name] for name in
+                      ("excellent", "good", "slow", "bad", "verybad", "err")]
 
 
 def surface_grade(ms, error):
@@ -41,42 +43,67 @@ def surface_grade(ms, error):
 
 class BlockMap(QWidget):
     CELL = 13
+    MAXCELLS = 8000
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.grades = []
+        self.cells = []      # ранги (худший в объединённой ячейке), ограничены MAXCELLS
+        self.merge = 1       # сколько сырых блоков на ячейку (растёт по мере скана)
+        self._acc = -1
+        self._acc_n = 0
+        self._dirty = False
         self.setMinimumHeight(230)
+        self._timer = QTimer(self)
+        self._timer.setInterval(120)
+        self._timer.timeout.connect(self._flush_paint)
+        self._timer.start()
 
     def reset(self):
-        self.grades = []
-        self.update()
+        self.cells = []
+        self.merge = 1
+        self._acc = -1
+        self._acc_n = 0
+        self._dirty = True
 
-    def add(self, ms, error):
-        self.grades.append(surface_grade(ms, error))
-        self.update()
+    def add_batch(self, grades):
+        for grade in grades:
+            rank = SURFACE_RANK[grade]
+            if rank > self._acc:
+                self._acc = rank
+            self._acc_n += 1
+            if self._acc_n >= self.merge:
+                self.cells.append(self._acc)
+                self._acc = -1
+                self._acc_n = 0
+        if len(self.cells) > self.MAXCELLS:
+            self.cells = [max(self.cells[i], self.cells[i + 1]) if i + 1 < len(self.cells)
+                          else self.cells[i] for i in range(0, len(self.cells), 2)]
+            self.merge *= 2
+        self._dirty = True
+
+    def _flush_paint(self):
+        if self._dirty:
+            self._dirty = False
+            self.update()
 
     def paintEvent(self, event):
         c = theme.current()
         painter = QPainter(self)
         painter.fillRect(self.rect(), QColor(c["canvas_bg"]))
-        w, h = self.width(), self.height()
         cell = self.CELL
-        cols = max(1, (w - 4) // cell)
-        rows = max(1, (h - 4) // cell)
+        cols = max(1, (self.width() - 4) // cell)
+        rows = max(1, (self.height() - 4) // cell)
         capacity = cols * rows
-        grades = self.grades
-        if grades and len(grades) > capacity:
-            bucket = len(grades) / capacity
-            reduced = []
-            for i in range(capacity):
-                chunk = grades[int(i * bucket):int((i + 1) * bucket)] or [grades[min(len(grades) - 1, int(i * bucket))]]
-                reduced.append(max(chunk, key=lambda g: SURFACE_RANK[g]))
-            grades = reduced
+        cells = self.cells
+        if cells and len(cells) > capacity:
+            bucket = len(cells) / capacity
+            cells = [max(cells[int(i * bucket):int((i + 1) * bucket)] or [cells[-1]])
+                     for i in range(capacity)]
         painter.setPen(Qt.PenStyle.NoPen)
-        for i, grade in enumerate(grades):
+        for i, rank in enumerate(cells):
             col = i % cols
             row = i // cols
-            painter.setBrush(QColor(SURFACE_COLOR[grade]))
+            painter.setBrush(QColor(SURFACE_RANK_COLOR[rank]))
             painter.drawRect(2 + col * cell, 2 + row * cell, cell - 2, cell - 2)
         painter.setPen(QColor(c["canvas_border"]))
         painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -84,7 +111,7 @@ class BlockMap(QWidget):
 
 
 class SurfaceWorker(QThread):
-    block = pyqtSignal(float, bool)
+    batch = pyqtSignal(list)
     progress = pyqtSignal(int)
     speed = pyqtSignal(float)
     done = pyqtSignal(object)
@@ -98,7 +125,7 @@ class SurfaceWorker(QThread):
 
     def stop(self):
         self._abort = True
-        self.wait(8000)
+        self.wait(3000)
 
     def run(self):
         if sys.platform != "win32":
@@ -108,28 +135,36 @@ class SurfaceWorker(QThread):
         kernel.CreateFileW.restype = wintypes.HANDLE
         kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
                                        wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+        kernel.ReadFile.argtypes = [wintypes.HANDLE, wintypes.LPVOID, wintypes.DWORD,
+                                    ctypes.POINTER(wintypes.DWORD), wintypes.LPVOID]
+        kernel.ReadFile.restype = wintypes.BOOL
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel.CloseHandle.restype = wintypes.BOOL
+        kernel.SetFilePointerEx.argtypes = [wintypes.HANDLE, ctypes.c_longlong,
+                                            ctypes.POINTER(ctypes.c_longlong), wintypes.DWORD]
+        kernel.SetFilePointerEx.restype = wintypes.BOOL
         handle = kernel.CreateFileW(self.path, 0x80000000, 0x1 | 0x2, None, 3, 0, None)
         if handle == wintypes.HANDLE(-1).value or not handle:
             self.done.emit({"error": "не удалось открыть диск (нужны права администратора)"})
             return
-        kernel.SetFilePointerEx.argtypes = [wintypes.HANDLE, ctypes.c_longlong,
-                                            ctypes.POINTER(ctypes.c_longlong), wintypes.DWORD]
-        buffer = ctypes.create_string_buffer(SURFACE_BLOCK)
-        read_bytes = wintypes.DWORD(0)
-        counts = {name: 0 for name in SURFACE_RANK}
-        total = self.size if self.size and self.size > 0 else 0
-        blocks_total = max(1, total // SURFACE_BLOCK) if total else 0
-        worst = 0.0
-        done_blocks = 0
-        pos = 0
-        start = time.perf_counter()
-        win_bytes = 0
-        win_start = start
         try:
+            buffer = ctypes.create_string_buffer(SURFACE_BLOCK)
+            read_bytes = wintypes.DWORD(0)
+            counts = {name: 0 for name in SURFACE_RANK}
+            total = self.size if self.size and self.size > 0 else 0
+            worst = 0.0
+            done_blocks = 0
+            pos = 0
+            start = time.perf_counter()
+            win_bytes = 0
+            win_start = start
+            batch = []
             while not self._abort:
-                if total and pos >= total:
+                # у конца диска остаток < 1 МБ не читаем (не выровнен по сектору → ложный бэд)
+                if total and pos + SURFACE_BLOCK > total:
                     break
-                if self.time_limit and (time.perf_counter() - start) >= self.time_limit:
+                elapsed = time.perf_counter() - start
+                if self.time_limit and elapsed >= self.time_limit:
                     break
                 t0 = time.perf_counter()
                 ok = kernel.ReadFile(handle, buffer, SURFACE_BLOCK, ctypes.byref(read_bytes), None)
@@ -137,28 +172,33 @@ class SurfaceWorker(QThread):
                 error = (not ok) or read_bytes.value == 0
                 grade = surface_grade(dt_ms, error)
                 counts[grade] += 1
-                self.block.emit(dt_ms, error)
+                batch.append(grade)
+                pos += SURFACE_BLOCK
+                done_blocks += 1
                 if error:
                     new_pos = ctypes.c_longlong(0)
-                    kernel.SetFilePointerEx(handle, ctypes.c_longlong(pos + SURFACE_BLOCK),
-                                            ctypes.byref(new_pos), 0)
+                    kernel.SetFilePointerEx(handle, ctypes.c_longlong(pos), ctypes.byref(new_pos), 0)
                 else:
                     worst = max(worst, dt_ms)
                     win_bytes += read_bytes.value
-                pos += SURFACE_BLOCK
-                done_blocks += 1
                 now = time.perf_counter()
-                if now - win_start >= 0.4:
-                    self.speed.emit(win_bytes / (1024 * 1024) / (now - win_start))
+                if now - win_start >= 0.25 or len(batch) >= 512:
+                    self.batch.emit(batch)
+                    batch = []
+                    if win_bytes:
+                        self.speed.emit(win_bytes / (1024 * 1024) / (now - win_start))
                     win_bytes = 0
                     win_start = now
-                if blocks_total:
-                    self.progress.emit(min(100, int(done_blocks * 100 / blocks_total)))
-                if not error and read_bytes.value < SURFACE_BLOCK:
+                    if self.time_limit:
+                        self.progress.emit(min(100, int((now - start) * 100 / self.time_limit)))
+                    elif total:
+                        self.progress.emit(min(100, int(pos * 100 / total)))
+                if not error and 0 < read_bytes.value < SURFACE_BLOCK:
                     break
-            elapsed = time.perf_counter() - start
+            if batch:
+                self.batch.emit(batch)
             self.done.emit({"counts": counts, "worst_ms": round(worst),
-                            "elapsed": round(elapsed), "blocks": done_blocks,
+                            "elapsed": round(time.perf_counter() - start), "blocks": done_blocks,
                             "scanned_gb": done_blocks * SURFACE_BLOCK / 1024 ** 3})
         except Exception as exc:
             self.done.emit({"error": str(exc)})
@@ -328,8 +368,13 @@ class SpeedWorker(QThread):
 
 class StorageWorker(QThread):
     done = pyqtSignal(object)
+    disks = pyqtSignal(list)
 
     def run(self):
+        try:
+            self.disks.emit(list_physical_disks())
+        except Exception:
+            self.disks.emit([])
         if sys.platform == "win32":
             try:
                 raw = _powershell(
@@ -451,6 +496,7 @@ class StoragePage(BaseTestPage):
         self.info.setText("Чтение состояния накопителей (S.M.A.R.T.)...")
         self.set_status("идет проверка S.M.A.R.T. ...")
         self.worker = StorageWorker(self)
+        self.worker.disks.connect(self._on_disks)
         self.worker.done.connect(self.on_done)
         self.worker.start()
 
@@ -459,14 +505,19 @@ class StoragePage(BaseTestPage):
         if self._smart_done:
             self.start_surface(180)
 
-    def _populate_disks(self):
-        self.disks = list_physical_disks()
+    def _on_disks(self, disks):
+        self.disks = disks
         self.disk_combo.clear()
-        for disk in self.disks:
+        for disk in disks:
             label = f"{disk['model']} — {disk['size'] / 1024 ** 3:.0f} ГБ"
             if disk["is_system"]:
                 label += " (системный)"
             self.disk_combo.addItem(label)
+
+    def _populate_disks(self):
+        # список дисков уже получен в фоне через сигнал disks; ничего не блокируем
+        if not self.disk_combo.count():
+            self._on_disks(self.disks or [])
 
     def _smart_ready(self):
         self._smart_done = True
@@ -498,7 +549,7 @@ class StoragePage(BaseTestPage):
         self.info.setText(f"Скан поверхности [{mode}]: {disk['model']}")
         self.set_status("идет посекторное чтение поверхности...")
         self.surface_worker = SurfaceWorker(disk["path"], disk["size"], time_limit, self)
-        self.surface_worker.block.connect(self.blockmap.add)
+        self.surface_worker.batch.connect(self.blockmap.add_batch)
         self.surface_worker.speed.connect(self.on_surface_speed)
         self.surface_worker.progress.connect(self.busy.setValue)
         self.surface_worker.done.connect(self.on_surface_done)
@@ -527,14 +578,17 @@ class StoragePage(BaseTestPage):
         counts = result["counts"]
         good = counts["excellent"] + counts["good"]
         problem = counts["bad"] + counts["verybad"] + counts["err"]
+        total_blocks = max(1, result["blocks"])
+        slow_ratio = counts["slow"] / total_blocks
+        bad_ratio = (counts["bad"] + counts["verybad"]) / total_blocks
         stats = (f"проверено {result['scanned_gb']:.1f} ГБ за {result['elapsed']} с · "
                  f"норма {good} · медленно {counts['slow']} · "
                  f"проблемных {problem} · бэдов {counts['err']} · макс. {result['worst_ms']} мс")
         self.disk_list.addItem(f"Скан поверхности: {stats}")
-        if counts["err"] > 0 or counts["verybad"] > 0 or counts["bad"] > 5:
+        if counts["err"] > 0 or counts["verybad"] > 0 or bad_ratio > 0.01:
             surface_grade_name = "bad"
             zone = "бэд-блоки / провалы — диск деградирует"
-        elif counts["slow"] > 50 or counts["bad"] > 0:
+        elif slow_ratio > 0.05 or counts["bad"] > 0:
             surface_grade_name = "warn"
             zone = "есть медленные зоны"
         else:
@@ -683,8 +737,10 @@ class StoragePage(BaseTestPage):
             self._smart_ready()
             return
         if not data:
-            self.info.setText("Накопители не найдены")
-            self.set_status("накопители не обнаружены", False)
+            self.info.setText("S.M.A.R.T. недоступен")
+            self.health_summary = "S.M.A.R.T. недоступен"
+            self.auto_pass = False
+            self._smart_ready()
             return
         healthy = True
         summary = []
