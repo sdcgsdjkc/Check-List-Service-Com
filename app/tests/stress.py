@@ -3,7 +3,7 @@ from collections import deque
 
 import psutil
 from PyQt6.QtCore import QPointF, Qt, QThread, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QPainter, QPen, QPolygonF
+from PyQt6.QtGui import QBrush, QColor, QLinearGradient, QPainter, QPainterPath, QPen, QPolygonF
 from PyQt6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
 
 from app import theme
@@ -328,41 +328,78 @@ class TempGraph(QWidget):
         self.samples = deque(maxlen=200)
         self.setMinimumSize(300, 200)
 
-    def add(self, load, temp):
-        self.samples.append((load, temp))
+    CPU_LOAD = "#29b6d8"
+    GPU_LOAD = "#a06cff"
+    CPU_TEMP = "#ef5350"
+    GPU_TEMP = "#ffa726"
+    LEGEND = [(CPU_LOAD, "CPU %"), (GPU_LOAD, "GPU %"), (CPU_TEMP, "CPU °C"), (GPU_TEMP, "GPU °C")]
+
+    def add(self, load, temp, gpu_load=None, gpu_temp=None):
+        self.samples.append((load, temp, gpu_load, gpu_temp))
         self.update()
 
     def clear(self):
         self.samples.clear()
         self.update()
 
+    def _series(self, idx, scale, w, h, step):
+        return [QPointF(i * step, h - s[idx] / scale * (h - 34) - 6)
+                for i, s in enumerate(self.samples) if s[idx] is not None]
+
     def paintEvent(self, event):
         c = theme.current()
         painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor(c["canvas_bg"]))
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
-        painter.setPen(QColor(c["canvas_grid"]))
+        radius = 12
+        clip = QPainterPath()
+        clip.addRoundedRect(0.0, 0.0, float(w), float(h), radius, radius)
+        painter.setClipPath(clip)
+        painter.fillRect(self.rect(), QColor(c["canvas_bg"]))
+        painter.setPen(QPen(QColor(c["canvas_grid"]), 1))
         for frac in (0.25, 0.5, 0.75):
             y = int(h * frac)
             painter.drawLine(0, y, w, y)
         if len(self.samples) >= 2:
             step = w / (self.samples.maxlen - 1)
-            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-            load_points = [QPointF(i * step, h - s[0] / 100.0 * (h - 8) - 4)
-                           for i, s in enumerate(self.samples)]
-            painter.setPen(QPen(QColor("#1e88e5"), 2))
-            painter.drawPolyline(QPolygonF(load_points))
-            temp_points = [QPointF(i * step, h - s[1] / 105.0 * (h - 8) - 4)
-                           for i, s in enumerate(self.samples) if s[1] is not None]
-            if len(temp_points) >= 2:
-                painter.setPen(QPen(QColor("#ef5350"), 2))
-                painter.drawPolyline(QPolygonF(temp_points))
-        painter.setPen(QColor("#1e88e5"))
-        painter.drawText(8, 16, "— нагрузка CPU, %")
-        painter.setPen(QColor("#ef5350"))
-        painter.drawText(8, 32, "— температура, °C")
+            load_points = self._series(0, 100.0, w, h, step)
+            if len(load_points) >= 2:
+                area = QPolygonF(load_points + [QPointF(load_points[-1].x(), h),
+                                                QPointF(load_points[0].x(), h)])
+                gradient = QLinearGradient(0, 0, 0, h)
+                top = QColor(self.CPU_LOAD)
+                top.setAlpha(90)
+                bottom = QColor(self.CPU_LOAD)
+                bottom.setAlpha(0)
+                gradient.setColorAt(0.0, top)
+                gradient.setColorAt(1.0, bottom)
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QBrush(gradient))
+                painter.drawPolygon(area)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.setPen(QPen(QColor(self.CPU_LOAD), 2))
+                painter.drawPolyline(QPolygonF(load_points))
+            for idx, color, scale in ((2, self.GPU_LOAD, 100.0),
+                                      (1, self.CPU_TEMP, 105.0),
+                                      (3, self.GPU_TEMP, 105.0)):
+                points = self._series(idx, scale, w, h, step)
+                if len(points) >= 2:
+                    painter.setPen(QPen(QColor(color), 2))
+                    painter.drawPolyline(QPolygonF(points))
+        # легенда-чипы
+        x = 12
+        for color, label in self.LEGEND:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(color))
+            painter.drawRoundedRect(x, 9, 11, 11, 3, 3)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QColor(c["canvas_text"]))
+            painter.drawText(x + 16, 19, label)
+            x += 16 + painter.fontMetrics().horizontalAdvance(label) + 14
+        painter.setClipping(False)
         painter.setPen(QColor(c["canvas_border"]))
-        painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRoundedRect(0, 0, w - 1, h - 1, radius, radius)
 
 
 class StressPage(BaseTestPage):
@@ -387,6 +424,7 @@ class StressPage(BaseTestPage):
         self.gpu_label.setWordWrap(True)
         self.vectors_label = QLabel("Векторы нагрузки: CPU-процессы + матрицы FP + пропускная способность ОЗУ + GPU-шейдер")
         self.vectors_label.setObjectName("specLabel")
+        self.vectors_label.setWordWrap(True)
         self.middle = QHBoxLayout()
         self.gpu = make_gpu_widget()
         self.gpu_shader = self.gpu is not None
@@ -412,6 +450,8 @@ class StressPage(BaseTestPage):
         self.gpu_dropped = False
         self.gpu_name = ""
         self.max_gpu_temp = None
+        self._last_gpu_temp = None
+        self._last_gpu_load = None
         self.monitor = None
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.tick)
@@ -457,6 +497,8 @@ class StressPage(BaseTestPage):
         self.gpu_dropped = False
         self.gpu_name = ""
         self.max_gpu_temp = None
+        self._last_gpu_temp = None
+        self._last_gpu_load = None
         self.time_label.setText("—")
         self.load_label.setText("Нагрузка CPU: —")
         self.temp_label.setText("Температура: —")
@@ -483,6 +525,8 @@ class StressPage(BaseTestPage):
         self.gpu_dropped = False
         self.gpu_name = ""
         self.max_gpu_temp = None
+        self._last_gpu_temp = None
+        self._last_gpu_load = None
         self.engine = StressEngine()
         self.engine.start()
         if self.engine.vectors:
@@ -517,7 +561,7 @@ class StressPage(BaseTestPage):
             self.temp_label.setText(f"Температура: {temp:.0f} °C")
         else:
             self.temp_label.setText("Температура: датчик недоступен")
-        self.graph.add(load, temp)
+        self.graph.add(load, temp, self._last_gpu_load, self._last_gpu_temp)
 
     def on_gpu(self, gpu):
         if self.monitor is None or gpu is None:
@@ -530,6 +574,9 @@ class StressPage(BaseTestPage):
             self.gpu_name = name
             if temp is not None:
                 self.max_gpu_temp = max(self.max_gpu_temp or 0.0, temp)
+                self._last_gpu_temp = temp
+            if load is not None:
+                self._last_gpu_load = load
             parts = [name]
             if load is not None:
                 parts.append(f"нагрузка {load:.0f}%")

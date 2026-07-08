@@ -85,9 +85,18 @@ def _battery_wear_linux():
     return None
 
 
-def _battery_cycles_windows():
+_battery_report_cache = None
+
+
+def _battery_report_windows():
+    # powercfg /batteryreport — надёжный источник ёмкости и циклов (WMI на многих ноутах пустой).
+    # Медленный (~2-5с), поэтому результат кэшируем на сессию.
+    global _battery_report_cache
+    if _battery_report_cache is not None:
+        return _battery_report_cache
+    _battery_report_cache = {}
     if sys.platform != "win32":
-        return None
+        return _battery_report_cache
     try:
         report = os.path.join(tempfile.gettempdir(), "servicecom_battery.xml")
         subprocess.run(["powercfg", "/batteryreport", "/xml", "/output", report],
@@ -98,31 +107,46 @@ def _battery_cycles_windows():
             os.remove(report)
         except OSError:
             pass
-        match = re.search(r"<CycleCount>(\d+)</CycleCount>", text)
-        if match:
-            value = int(match.group(1))
-            return value if value > 0 else None
+        result = {}
+        design = re.search(r"<DesignCapacity>(\d+)</DesignCapacity>", text)
+        full = re.search(r"<FullChargeCapacity>(\d+)</FullChargeCapacity>", text)
+        cycles = re.search(r"<CycleCount>(\d+)</CycleCount>", text)
+        if design and int(design.group(1)) > 0:
+            result["design"] = float(design.group(1))
+        if full and int(full.group(1)) > 0:
+            result["full"] = float(full.group(1))
+        if cycles and int(cycles.group(1)) > 0:
+            result["cycles"] = int(cycles.group(1))
+        _battery_report_cache = result
     except Exception:
-        return None
-    return None
+        _battery_report_cache = {}
+    return _battery_report_cache
 
 
-def collect_battery():
+def collect_battery(with_cycles=True):
     if sys.platform == "win32":
         result = _battery_wear_windows()
     elif sys.platform == "darwin":
         result = _battery_wear_macos()
     else:
         result = _battery_wear_linux()
+    cycles = None
+    # На Windows WMI-ёмкость часто пустая — берём из отчёта powercfg (медленно, только на полном этапе)
+    if with_cycles and sys.platform == "win32":
+        report = _battery_report_windows()
+        if not result and report.get("design") and report.get("full"):
+            result = (report["design"], report["full"])
+        cycles = report.get("cycles")
     if not result:
         battery = psutil.sensors_battery()
         if battery is None:
             return "нет АКБ", "стационарное устройство"
+        if with_cycles:
+            return "н/д", f"заряд {battery.percent:.0f}% (ёмкость не сообщается системой)"
         return "н/д", f"заряд {battery.percent:.0f}%"
     design, full = result
     wear = max(0.0, (1.0 - full / design) * 100.0)
     note = f"{full:.0f} / {design:.0f} мВт·ч"
-    cycles = _battery_cycles_windows()
     if cycles is not None:
         note += f" · {cycles} циклов"
     return f"{wear:.0f}%", note
@@ -204,7 +228,7 @@ def collect_device_type():
     return _device_type_from_chassis(code, battery)
 
 
-def collect_specs():
+def collect_specs(with_cycles=True):
     battery = None
     try:
         battery = psutil.sensors_battery()
@@ -295,4 +319,21 @@ class SpecsWorker(QThread):
     ready = pyqtSignal(dict)
 
     def run(self):
-        self.ready.emit(collect_specs())
+        # 1) быстрые характеристики (модель/CPU/ОЗУ/тип/износ по WMI) — сразу в шапку
+        specs = collect_specs(with_cycles=False)
+        self.ready.emit(specs)
+        # 2) прогрев датчиков температуры (LHM/CLR), чтобы в стресс-тесте температура шла без задержки
+        try:
+            read_temperature()
+        except Exception:
+            pass
+        # 3) износ/циклы АКБ через powercfg (медленно) — обновляем шапку, когда готово
+        try:
+            wear, note = collect_battery(with_cycles=True)
+            if (wear, note) != (specs.get("battery_wear"), specs.get("battery_note")):
+                specs = dict(specs)
+                specs["battery_wear"] = wear
+                specs["battery_note"] = note
+                self.ready.emit(specs)
+        except Exception:
+            pass
