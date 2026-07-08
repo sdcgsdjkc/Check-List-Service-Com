@@ -220,6 +220,8 @@ class SpeedGraph(QWidget):
 
     def add(self, speed):
         self.samples.append(speed)
+        if len(self.samples) > 4000:
+            self.samples = self.samples[-4000:]
         self.update()
 
     def set_threshold(self, value):
@@ -570,7 +572,8 @@ class StoragePage(BaseTestPage):
         self.surface_worker = None
         if "error" in result:
             self.disk_list.addItem(f"Скан поверхности недоступен: {result['error']}")
-            self.speed_label.setText("Посекторный скан недоступен — обычный замер скорости")
+            self.disk_list.addItem("    ⚠ замер скорости идёт по системному диску (не по выбранному)")
+            self.speed_label.setText("Посекторный скан недоступен — обычный замер скорости системного диска")
             self.blockmap.hide()
             self.graph.show()
             self.start_speed_test()

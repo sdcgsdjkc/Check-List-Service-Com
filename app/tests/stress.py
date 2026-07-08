@@ -21,31 +21,40 @@ DURATION = 120
 
 
 def _numpy_worker(stop_event):
-    size = 768
-    a = np.random.rand(size, size)
-    b = np.random.rand(size, size)
-    while not stop_event.is_set():
-        c = a.dot(b)
-        c = np.sin(c) + np.sqrt(np.abs(c) + 1.0)
-        a = c / (np.max(c) + 1e-9)
+    try:
+        size = 768
+        a = np.random.rand(size, size)
+        b = np.random.rand(size, size)
+        while not stop_event.is_set():
+            c = a.dot(b)
+            c = np.sin(c) + np.sqrt(np.abs(c) + 1.0)
+            a = c / (np.max(c) + 1e-9)
+    except Exception:
+        pass
 
 
 def _python_worker(stop_event):
     import math
-    value = 0.0001
-    while not stop_event.is_set():
-        for _ in range(50000):
-            value = math.sin(value) + math.sqrt(value * value + 1.0)
+    try:
         value = 0.0001
+        while not stop_event.is_set():
+            for _ in range(50000):
+                value = math.sin(value) + math.sqrt(value * value + 1.0)
+            value = 0.0001
+    except Exception:
+        pass
 
 
 def _memory_worker(stop_event):
-    block = 64 * 1024 * 1024
-    source = bytes(block)
-    target = bytearray(block)
-    while not stop_event.is_set():
-        target[:] = source
-        _ = sum(target[::4194304])
+    try:
+        block = 64 * 1024 * 1024
+        source = bytes(block)
+        target = bytearray(block)
+        while not stop_event.is_set():
+            target[:] = source
+            _ = sum(target[::4194304])
+    except Exception:
+        pass
 
 
 class StressEngine:
@@ -310,7 +319,7 @@ class SensorWorker(QThread):
 
     def stop(self):
         self._active = False
-        self.wait(4000)
+        return self.wait(4000)
 
 
 class TempGraph(QWidget):
@@ -497,6 +506,8 @@ class StressPage(BaseTestPage):
             self.stop_test(aborted=False)
 
     def on_sample(self, load, temp):
+        if self.monitor is None:
+            return
         self.max_load = max(self.max_load, load)
         self.load_samples.append(load)
         self.load_label.setText(f"Нагрузка CPU: {load:.0f}%")
@@ -509,7 +520,7 @@ class StressPage(BaseTestPage):
         self.graph.add(load, temp)
 
     def on_gpu(self, gpu):
-        if gpu is None:
+        if self.monitor is None or gpu is None:
             return
         name = gpu.get("name")
         load = gpu.get("load")
@@ -533,7 +544,9 @@ class StressPage(BaseTestPage):
         self.timer.stop()
         self.gpu.stop()
         if self.monitor is not None:
-            self.monitor.stop()
+            finished = self.monitor.stop()
+            if finished:
+                self.monitor.deleteLater()
             self.monitor = None
         if self.engine is not None:
             self.engine.stop()

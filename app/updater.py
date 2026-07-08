@@ -42,7 +42,12 @@ def _version_tuple(value):
 
 
 def _is_newer(remote, local):
-    return _version_tuple(remote) > _version_tuple(local)
+    remote_t = _version_tuple(remote)
+    local_t = _version_tuple(local)
+    length = max(len(remote_t), len(local_t))
+    remote_t += (0,) * (length - len(remote_t))
+    local_t += (0,) * (length - len(local_t))
+    return remote_t > local_t
 
 
 def origin_exe():

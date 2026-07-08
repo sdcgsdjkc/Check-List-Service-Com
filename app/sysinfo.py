@@ -146,16 +146,21 @@ def list_physical_disks():
         if isinstance(data, dict):
             data = [data]
         for item in data:
-            index = int(item.get("Index"))
-            size = int(item.get("Size") or 0)
-            model = (item.get("Model") or f"Диск {index}").strip()
-            disks.append({
-                "index": index,
-                "model": model,
-                "size": size,
-                "path": f"\\\\.\\PhysicalDrive{index}",
-                "is_system": (index == system_index),
-            })
+            try:
+                if item.get("Index") is None:
+                    continue
+                index = int(item.get("Index"))
+                size = int(item.get("Size") or 0)
+                model = (item.get("Model") or f"Диск {index}").strip()
+                disks.append({
+                    "index": index,
+                    "model": model,
+                    "size": size,
+                    "path": f"\\\\.\\PhysicalDrive{index}",
+                    "is_system": (index == system_index),
+                })
+            except (TypeError, ValueError):
+                continue
     except Exception:
         return []
     if system_index is None and disks:
@@ -171,48 +176,60 @@ CHASSIS_TYPES = {
 }
 
 
+def _device_type_from_chassis(code, battery):
+    if code is not None:
+        try:
+            name = CHASSIS_TYPES.get(int(code))
+            if name:
+                return name
+        except Exception:
+            pass
+    return "Ноутбук" if battery is not None else "ПК"
+
+
 def collect_device_type():
     battery = None
     try:
         battery = psutil.sensors_battery()
     except Exception:
         pass
+    code = None
     if sys.platform == "win32":
         try:
             raw = _powershell(
                 "(Get-CimInstance Win32_SystemEnclosure).ChassisTypes | ConvertTo-Json")
-            data = json.loads(raw)
-            code = _first(data)
-            if code is not None:
-                name = CHASSIS_TYPES.get(int(code))
-                if name:
-                    return name
+            code = _first(json.loads(raw))
         except Exception:
-            pass
-    if battery is not None:
-        return "Ноутбук"
-    return "ПК"
+            code = None
+    return _device_type_from_chassis(code, battery)
 
 
 def collect_specs():
+    battery = None
+    try:
+        battery = psutil.sensors_battery()
+    except Exception:
+        pass
     specs = {
         "model": platform.node() or "н/д",
         "cpu": platform.processor() or "н/д",
         "ram": f"{psutil.virtual_memory().total / 1024 ** 3:.0f} ГБ",
-        "device_type": "—",
+        "device_type": "Ноутбук" if battery is not None else "ПК",
         "battery_wear": "н/д",
         "battery_note": "",
     }
-    specs["device_type"] = collect_device_type()
-    specs["battery_wear"], specs["battery_note"] = collect_battery()
     if sys.platform != "win32":
+        specs["battery_wear"], specs["battery_note"] = collect_battery()
         return specs
+    # одним вызовом PowerShell: модель, CPU и тип корпуса (вместо трёх процессов)
     try:
         raw = _powershell(
             "$cs=Get-CimInstance Win32_ComputerSystem;"
             "$pr=Get-CimInstance Win32_ComputerSystemProduct;"
             "$cpu=Get-CimInstance Win32_Processor | Select-Object -First 1;"
-            "@{man=$cs.Manufacturer;model=$cs.Model;ver=$pr.Version;cpu=$cpu.Name} | ConvertTo-Json")
+            "$ch=(Get-CimInstance Win32_SystemEnclosure).ChassisTypes;"
+            "@{man=$cs.Manufacturer;model=$cs.Model;ver=$pr.Version;cpu=$cpu.Name;chassis=$ch} "
+            "| ConvertTo-Json")
         data = json.loads(raw)
         model = " ".join(part for part in [data.get("man") or "", data.get("model") or ""] if part).strip()
         version = (data.get("ver") or "").strip()
@@ -223,8 +240,10 @@ def collect_specs():
         cpu = (data.get("cpu") or "").strip()
         if cpu:
             specs["cpu"] = cpu
+        specs["device_type"] = _device_type_from_chassis(_first(data.get("chassis")), battery)
     except Exception:
         pass
+    specs["battery_wear"], specs["battery_note"] = collect_battery()
     return specs
 
 

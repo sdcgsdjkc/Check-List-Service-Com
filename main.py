@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 
 for _var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
              "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
@@ -96,6 +97,20 @@ def main():
             pass
 
     sys.excepthook = handle_exception
+
+    def thread_exception(args):
+        try:
+            log_path = os.path.join(tempfile.gettempdir(), "servicecom_error.log")
+            with open(log_path, "a", encoding="utf-8") as handle:
+                handle.write("".join(traceback.format_exception(
+                    args.exc_type, args.exc_value, args.exc_traceback)) + "\n")
+        except Exception:
+            pass
+
+    try:
+        threading.excepthook = thread_exception
+    except Exception:
+        pass
     if not acquire_single_instance():
         close_splash()
         sys.exit(0)
