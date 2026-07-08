@@ -411,10 +411,14 @@ class StressPage(BaseTestPage):
         top = QHBoxLayout()
         self.start_button = QPushButton("Старт (2 минуты)")
         self.start_button.clicked.connect(self.toggle)
+        self.infinite_button = QPushButton("∞ Бесконечно")
+        self.infinite_button.setToolTip("Гонять стресс без ограничения по времени — до ручной остановки")
+        self.infinite_button.clicked.connect(self.toggle_infinite)
         self.time_label = QLabel("—")
         self.load_label = QLabel("Нагрузка CPU: —")
         self.temp_label = QLabel("Температура: —")
         top.addWidget(self.start_button)
+        top.addWidget(self.infinite_button)
         top.addWidget(self.time_label)
         top.addStretch(1)
         top.addWidget(self.load_label)
@@ -442,6 +446,8 @@ class StressPage(BaseTestPage):
         self.body.addLayout(self.middle, 1)
         self.engine = None
         self.seconds_left = 0
+        self.infinite = False
+        self.elapsed = 0
         self.max_temp = None
         self.max_load = 0.0
         self.temp_samples = []
@@ -489,6 +495,8 @@ class StressPage(BaseTestPage):
     def reset_state(self):
         self.graph.clear()
         self.gpu.stop()
+        self.infinite = False
+        self.elapsed = 0
         self.max_temp = None
         self.max_load = 0.0
         self.temp_samples = []
@@ -504,18 +512,26 @@ class StressPage(BaseTestPage):
         self.temp_label.setText("Температура: —")
         self.gpu_label.setText("GPU: —")
         self.start_button.setText("Старт (2 минуты)")
+        self.infinite_button.setEnabled(True)
 
     def auto_start(self):
         if self.engine is None:
-            self.start_test()
+            self.start_test(infinite=False)
 
     def toggle(self):
         if self.engine is not None:
-            self.stop_test(aborted=True)
+            # ручная остановка: для бесконечного режима — с вердиктом, для 2-мин — как прерывание
+            self.stop_test(aborted=not self.infinite)
         else:
-            self.start_test()
+            self.start_test(infinite=False)
 
-    def start_test(self):
+    def toggle_infinite(self):
+        if self.engine is None:
+            self.start_test(infinite=True)
+
+    def start_test(self, infinite=False):
+        self.infinite = infinite
+        self.elapsed = 0
         self.graph.clear()
         self.max_temp = None
         self.max_load = 0.0
@@ -537,13 +553,23 @@ class StressPage(BaseTestPage):
         self.monitor.sample.connect(self.on_sample)
         self.monitor.gpu.connect(self.on_gpu)
         self.monitor.start()
-        self.seconds_left = DURATION
-        self.time_label.setText(f"Осталось: {self.seconds_left} с")
+        self.infinite_button.setEnabled(False)
+        self.start_button.setText("■ Стоп")
+        if infinite:
+            self.time_label.setText("Идёт: 0:00 (∞ — стоп вручную)")
+            self.set_status("идет бесконечный стресс-тест — остановите вручную...")
+        else:
+            self.seconds_left = DURATION
+            self.time_label.setText(f"Осталось: {self.seconds_left} с")
+            self.set_status("идет стресс-тест (комплекс нагрузок)...")
         self.timer.start(1000)
-        self.start_button.setText("Стоп")
-        self.set_status("идет стресс-тест (комплекс нагрузок)...")
 
     def tick(self):
+        if self.infinite:
+            self.elapsed += 1
+            minutes, seconds = divmod(self.elapsed, 60)
+            self.time_label.setText(f"Идёт: {minutes}:{seconds:02d} (∞ — стоп вручную)")
+            return
         self.seconds_left -= 1
         self.time_label.setText(f"Осталось: {self.seconds_left} с")
         if self.seconds_left <= 0:
@@ -599,6 +625,9 @@ class StressPage(BaseTestPage):
             self.engine.stop()
             self.engine = None
         self.start_button.setText("Старт (2 минуты)")
+        self.infinite_button.setEnabled(True)
+        was_infinite = self.infinite
+        self.infinite = False
         if aborted:
             self.set_status("тест остановлен вручную", "warn")
             return
@@ -628,7 +657,8 @@ class StressPage(BaseTestPage):
         else:
             gpu_note = "GPU: датчик недоступен"
         self.summary = " · ".join(summary_parts)
-        parts = [f"{DURATION} с без сбоев", load_note, temp_note, gpu_note]
+        ran = f"{self.elapsed} с (бесконечный режим)" if was_infinite else f"{DURATION} с без сбоев"
+        parts = [ran, load_note, temp_note, gpu_note]
         details = ", ".join(part for part in parts if part)
         if self.gpu_dropped:
             self.details = details

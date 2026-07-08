@@ -37,6 +37,37 @@ def _api_url():
     return f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 
 
+def _access_url():
+    # Флаг доступа лежит в репозитории: access.json = {"enabled": true, "message": "..."}
+    return f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/access.json"
+
+
+def check_access():
+    # Возвращает (allowed, message). При любой ошибке/оффлайне — разрешаем (fail-open),
+    # чтобы программа работала без интернета; блокировка срабатывает, когда машина онлайн.
+    if not _configured():
+        return True, ""
+    try:
+        context = _ssl_context()
+        request = urllib.request.Request(
+            _access_url(), headers={"User-Agent": "ServiceCom", "Cache-Control": "no-cache"})
+        with urllib.request.urlopen(request, timeout=6, context=context) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        allowed = bool(data.get("enabled", True))
+        message = str(data.get("message", "")).strip()
+        return allowed, message
+    except Exception:
+        return True, ""
+
+
+class AccessChecker(QThread):
+    result = pyqtSignal(bool, str)
+
+    def run(self):
+        allowed, message = check_access()
+        self.result.emit(allowed, message)
+
+
 def _version_tuple(value):
     return tuple(int(part) for part in re.findall(r"\d+", value or "")) or (0,)
 

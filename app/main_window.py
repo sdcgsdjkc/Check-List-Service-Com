@@ -12,7 +12,8 @@ from app.sysinfo import SpecsWorker
 from app.tests import PAGE_CLASSES
 from app.tests.base import BaseTestPage
 from app.theme import colors, set_current, stylesheet
-from app.updater import VERSION, UpdateChecker, UpdateDownloader, can_update, is_configured
+from app.updater import (VERSION, AccessChecker, UpdateChecker, UpdateDownloader,
+                         can_update, is_configured)
 
 
 class MainWindow(QMainWindow):
@@ -86,6 +87,17 @@ class MainWindow(QMainWindow):
         self.update_checker.start()
         self.update_downloader = None
         self.update_dialog = None
+        self.access_checker = AccessChecker(self)
+        self.access_checker.result.connect(self.on_access_checked)
+        self.access_checker.start()
+
+    def on_access_checked(self, allowed, message):
+        if allowed:
+            return
+        QMessageBox.critical(
+            self, "Доступ закрыт",
+            message or "Доступ к программе закрыт. Обратитесь к разработчику.")
+        QApplication.instance().quit()
 
     def on_update_found(self, info):
         if not info:
