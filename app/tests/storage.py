@@ -421,8 +421,8 @@ class StoragePage(BaseTestPage):
         controls.addWidget(QLabel("Диск:"))
         self.disk_combo = QComboBox()
         controls.addWidget(self.disk_combo, 1)
-        self.quick_button = QPushButton("Быстрый скан (3 мин)")
-        self.quick_button.clicked.connect(lambda: self.start_surface(180))
+        self.quick_button = QPushButton("Быстрый скан (2 мин)")
+        self.quick_button.clicked.connect(lambda: self.start_surface(120))
         self.full_button = QPushButton("Полный проход")
         self.full_button.clicked.connect(lambda: self.start_surface(None))
         self.stop_button = QPushButton("Стоп")
@@ -505,7 +505,7 @@ class StoragePage(BaseTestPage):
     def auto_start(self):
         self._auto_quick = True
         if self._smart_done:
-            self.start_surface(180)
+            self.start_surface(120)
 
     def _on_disks(self, disks):
         self.disks = disks
@@ -526,7 +526,7 @@ class StoragePage(BaseTestPage):
         self.busy.hide()
         self._populate_disks()
         if self._auto_quick:
-            self.start_surface(180)
+            self.start_surface(120)
         elif self.disks:
             self.set_status("выберите режим скана поверхности или отметьте тест вручную")
         else:
@@ -547,7 +547,7 @@ class StoragePage(BaseTestPage):
         self.quick_button.setEnabled(False)
         self.full_button.setEnabled(False)
         self.stop_button.show()
-        mode = "быстрый, 3 мин" if time_limit else "полный проход"
+        mode = "быстрый, 2 мин" if time_limit else "полный проход"
         self.info.setText(f"Скан поверхности [{mode}]: {disk['model']}")
         self.set_status("идет посекторное чтение поверхности...")
         self.surface_worker = SurfaceWorker(disk["path"], disk["size"], time_limit, self)
