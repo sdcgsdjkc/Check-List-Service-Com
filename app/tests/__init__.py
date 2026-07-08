@@ -11,15 +11,17 @@ from app.tests.network import NetworkPage
 from app.tests.display import DisplayPage
 
 PAGE_CLASSES = [
-    PortsPage,
+    # Автоматические тесты — идут в авто-прогоне подряд, без участия мастера
     DriversPage,
-    KeyboardPage,
-    TouchpadPage,
     StoragePage,
     MemoryPage,
     StressPage,
     UserDataPage,
-    AvPage,
     NetworkPage,
+    # Ручные тесты — проверяет мастер
+    PortsPage,
+    KeyboardPage,
+    TouchpadPage,
+    AvPage,
     DisplayPage,
 ]

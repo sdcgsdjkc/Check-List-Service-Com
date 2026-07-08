@@ -34,8 +34,20 @@ class MainWindow(QMainWindow):
         body = QHBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(12)
+        self.auto_button = QPushButton("▶  Авто-прогон")
+        self.auto_button.setObjectName("autoButton")
+        self.auto_button.setMinimumHeight(46)
+        self.auto_button.setToolTip("Запустить все автоматические тесты подряд без участия мастера")
+        self.auto_button.clicked.connect(self.start_auto_run)
         self.checklist = QListWidget()
-        self.checklist.setFixedWidth(280)
+        left_panel = QVBoxLayout()
+        left_panel.setSpacing(10)
+        left_panel.setContentsMargins(0, 0, 0, 0)
+        left_panel.addWidget(self.auto_button)
+        left_panel.addWidget(self.checklist, 1)
+        left_widget = QWidget()
+        left_widget.setFixedWidth(280)
+        left_widget.setLayout(left_panel)
         self.stack = QStackedWidget()
         self.stack.setObjectName("contentCard")
         self.pages = []
@@ -52,7 +64,7 @@ class MainWindow(QMainWindow):
         self.report_page = ReportPage(colors(self.theme_name))
         self.stack.addWidget(self.report_page)
         QListWidgetItem("Итоговый отчет", self.checklist)
-        body.addWidget(self.checklist)
+        body.addWidget(left_widget)
         body.addWidget(self.stack, 1)
         root.addLayout(body, 1)
         root.addLayout(self._build_footer())
@@ -60,7 +72,12 @@ class MainWindow(QMainWindow):
         self.auto_running = False
         self.auto_queue = []
         self.checklist.currentRowChanged.connect(self.switch_page)
+        # Показываем первый пункт, но НЕ запускаем его тест сам — старт по кнопке
+        # «Авто-прогон» или при переходе на пункт. current_row остаётся -1.
+        self.checklist.blockSignals(True)
         self.checklist.setCurrentRow(0)
+        self.checklist.blockSignals(False)
+        self.stack.setCurrentIndex(0)
         self.specs_worker = SpecsWorker(self)
         self.specs_worker.ready.connect(self.apply_specs)
         self.specs_worker.start()
@@ -153,10 +170,6 @@ class MainWindow(QMainWindow):
         self.theme_button = QPushButton()
         self.theme_button.setObjectName("themeButton")
         self.theme_button.setToolTip("Сменить тему (тёмная / светлая)")
-        self.auto_button = QPushButton("▶ Авто-прогон")
-        self.auto_button.setToolTip("Запустить все автоматические тесты подряд без участия мастера")
-        self.auto_button.clicked.connect(self.start_auto_run)
-        layout.addWidget(self.auto_button)
         self.theme_button.clicked.connect(self.toggle_theme)
         self._update_theme_button()
         layout.addWidget(self.theme_button)
@@ -342,6 +355,10 @@ class MainWindow(QMainWindow):
             index = self.auto_queue.pop(0)
             if self.pages[index].result is None:
                 self.checklist.setCurrentRow(index)
+                if self.current_row != index:
+                    # пункт уже был визуально выбран (напр. первый при запуске) —
+                    # сигнал не сработал, входим на страницу вручную
+                    self.switch_page(index)
                 try:
                     self.pages[index].auto_start()
                 except Exception:

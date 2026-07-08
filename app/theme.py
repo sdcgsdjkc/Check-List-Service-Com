@@ -139,6 +139,10 @@ QWidget {{ background: transparent; color: {c['text']}; font-size: 13px; }}
 #devLabel {{ color: {c['dev']}; font-size: 11px; }}
 #bigValue {{ font-size: 17px; font-weight: 700; padding: 6px; }}
 #themeButton {{ font-size: 18px; padding: 6px 12px; min-width: 20px; border-radius: 12px; }}
+#autoButton {{ background: {c['accent']}; color: #ffffff; font-size: 15px; font-weight: 700;
+              border: none; border-radius: 12px; padding: 10px 16px; }}
+#autoButton:hover {{ background: {c['accent']}; }}
+#autoButton:disabled {{ background: {c['btn_bg']}; color: {c['status_label']}; border: 1px solid {c['btn_border']}; }}
 QPushButton {{ background: {c['btn_bg']}; border: 1px solid {c['btn_border']};
               border-radius: 12px; padding: 9px 20px; }}
 QPushButton:hover {{ background: {c['btn_hover']}; }}
