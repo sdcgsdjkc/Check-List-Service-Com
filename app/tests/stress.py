@@ -30,6 +30,7 @@ def _numpy_worker(stop_event, size=1100):
         while not stop_event.is_set():
             c = a.dot(b)
             c = c.dot(b)
+            c = c.dot(b)
             a = c * (1.0 / (np.abs(c).max() + 1e-9))
     except Exception:
         pass
@@ -82,15 +83,18 @@ class StressEngine:
                     size = 1500
             except Exception:
                 size = 1100
+        # cores+2 потоков: лишние два затыкают провалы GIL на Python-склейке между matmul,
+        # что даёт загрузку CPU близко к 100% (проверено замером). Больше — уже трэшинг.
+        n_threads = cores + 2 if use_numpy else cores
         label = (f"матричные вычисления FP {size}×{size} (numpy)" if use_numpy
                  else "вычислительные потоки CPU")
-        for _ in range(cores):
+        for _ in range(n_threads):
             args = (self.stop_thread, size) if use_numpy else (self.stop_thread,)
             worker = _numpy_worker if use_numpy else _python_worker
             thread = threading.Thread(target=worker, args=args, daemon=True)
             thread.start()
             self.threads.append(thread)
-        self.vectors.append(f"{cores} потоков — {label}")
+        self.vectors.append(f"{n_threads} потоков — {label}")
         bandwidth = threading.Thread(target=_memory_worker, args=(self.stop_thread,), daemon=True)
         bandwidth.start()
         self.threads.append(bandwidth)
