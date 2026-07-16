@@ -1,41 +1,81 @@
 import json
-import os
-import subprocess
+import re
 import sys
-import urllib.parse
-import webbrowser
 
 from PyQt6.QtCore import QThread, pyqtSignal
-from PyQt6.QtWidgets import QFileDialog, QLabel, QListWidget, QProgressBar, QPushButton
+from PyQt6.QtWidgets import QLabel, QListWidget, QProgressBar, QPushButton
 
-from app.sysinfo import CREATE_NO_WINDOW, _powershell
+from app.sysinfo import _powershell
 from app.tests.base import BaseTestPage
 
-CATALOG_URL = "https://www.catalog.update.microsoft.com/Search.aspx?q="
-
-# Поиск + скачивание + установка драйверов через Windows Update Agent (COM)
-WUA_INSTALL = r'''
+# Комбинированный установщик драйверов:
+#   1) Windows Update Agent (COM) — то, что есть в WU
+#   2) Каталог Microsoft Update по Hardware ID — качает .cab, распаковывает, ставит через pnputil
+# Источник только официальный Microsoft (подписанные драйверы, без стороннего мусора).
+WUA_CATALOG = r'''
 $ErrorActionPreference = 'Stop'
+$reboot = $false
+
+# --- 1) Windows Update Agent ---
 try {
   $s = New-Object -ComObject Microsoft.Update.Session
   $se = $s.CreateUpdateSearcher()
   $r = $se.Search("IsInstalled=0 and Type='Driver'")
-  if ($r.Updates.Count -eq 0) {
-    Write-Output 'NONE'
-  } else {
+  if ($r.Updates.Count -gt 0) {
     $coll = New-Object -ComObject Microsoft.Update.UpdateColl
-    foreach ($u in $r.Updates) {
-      try { $u.AcceptEula() | Out-Null } catch {}
-      Write-Output ('FOUND|' + $u.Title)
-      $coll.Add($u) | Out-Null
-    }
+    foreach ($u in $r.Updates) { try { $u.AcceptEula() | Out-Null } catch {}; Write-Output ('WUA_FOUND|' + $u.Title); $coll.Add($u) | Out-Null }
     $d = $s.CreateUpdateDownloader(); $d.Updates = $coll; $d.Download() | Out-Null
     $i = $s.CreateUpdateInstaller(); $i.Updates = $coll; $ir = $i.Install()
-    Write-Output ('RESULT|' + $ir.ResultCode + '|' + $ir.RebootRequired)
-  }
-} catch {
-  Write-Output ('ERR|' + $_.Exception.Message)
+    if ($ir.RebootRequired) { $reboot = $true }
+    Write-Output ('WUA_RESULT|' + $ir.ResultCode)
+  } else { Write-Output 'WUA_NONE' }
+} catch { Write-Output ('WUA_ERR|' + $_.Exception.Message) }
+
+# --- 2) Каталог Microsoft Update по Hardware ID ---
+$queries = @(%QUERIES%)
+$work = Join-Path $env:TEMP 'scaa_drv'
+Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force -Path $work | Out-Null
+$gotCab = $false
+foreach ($q in $queries) {
+  try {
+    $uri = "https://www.catalog.update.microsoft.com/Search.aspx?q=" + [uri]::EscapeDataString($q)
+    $page = Invoke-WebRequest -UseBasicParsing -TimeoutSec 30 -Uri $uri
+    $guids = [regex]::Matches($page.Content, '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}') | ForEach-Object { $_.Value.ToLower() } | Select-Object -Unique
+    if (-not $guids) { Write-Output ('CAT_NONE|' + $q); continue }
+    $done = $false
+    foreach ($g in ($guids | Select-Object -First 4)) {
+      if ($done) { break }
+      try {
+        $body = @{ updateIDs = '[{"size":0,"languages":"","uidInfo":"' + $g + '","updateID":"' + $g + '"}]' }
+        $dd = Invoke-WebRequest -UseBasicParsing -TimeoutSec 30 -Method Post -Uri 'https://www.catalog.update.microsoft.com/DownloadDialog.aspx' -Body $body
+        $urls = [regex]::Matches($dd.Content, 'https?://[^"'' ]+?\.cab') | ForEach-Object { $_.Value } | Select-Object -Unique
+        foreach ($u in $urls) {
+          $cab = Join-Path $work ([System.IO.Path]::GetFileName(($u -split '\?')[0]))
+          Invoke-WebRequest -UseBasicParsing -TimeoutSec 180 -Uri $u -OutFile $cab
+          $ext = Join-Path $work ([System.IO.Path]::GetFileNameWithoutExtension($cab))
+          New-Item -ItemType Directory -Force -Path $ext | Out-Null
+          & expand.exe $cab -F:* $ext | Out-Null
+          $gotCab = $true; $done = $true
+          Write-Output ('CAT_GOT|' + $q)
+        }
+      } catch {}
+    }
+    if (-not $done) { Write-Output ('CAT_NONE|' + $q) }
+  } catch { Write-Output ('CAT_ERR|' + $q) }
 }
+
+# --- 3) установка распакованных inf ---
+if ($gotCab) {
+  try {
+    $null = & pnputil /add-driver (Join-Path $work '*.inf') /subdirs /install 2>&1
+    if ($LASTEXITCODE -eq 3010) { $reboot = $true }
+    Write-Output ('PNP|' + $LASTEXITCODE)
+  } catch { Write-Output 'PNP_ERR' }
+}
+Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
+if ($reboot) { Write-Output 'REBOOT' }
+Write-Output 'DONE'
 '''
 
 
@@ -65,57 +105,37 @@ class DriversWorker(QThread):
 class DriverInstallWorker(QThread):
     done = pyqtSignal(object)
 
+    def __init__(self, queries, parent=None):
+        super().__init__(parent)
+        self.queries = queries
+
     def run(self):
         if sys.platform != "win32":
             self.done.emit({"error": "установка драйверов доступна только на Windows"})
             return
+        arr = ",".join("'" + q.replace("'", "") + "'" for q in self.queries)
+        script = WUA_CATALOG.replace("%QUERIES%", arr)
         try:
-            raw = _powershell(WUA_INSTALL, timeout=900)
+            raw = _powershell(script, timeout=1200)
         except Exception as exc:
-            self.done.emit({"error": f"Windows Update недоступен: {exc}"})
+            self.done.emit({"error": f"Windows Update / каталог недоступны: {exc}"})
             return
-        found, reboot, result, error, none = [], False, None, None, False
+        installed, reboot, error, wua_none, cat_any = [], False, None, False, False
         for line in raw.splitlines():
             line = line.strip()
-            if line == "NONE":
-                none = True
-            elif line.startswith("FOUND|"):
-                found.append(line[6:])
-            elif line.startswith("RESULT|"):
-                parts = line.split("|")
-                result = parts[1] if len(parts) > 1 else None
-                reboot = len(parts) > 2 and parts[2].lower() in ("true", "1")
-            elif line.startswith("ERR|"):
-                error = line[4:]
-        self.done.emit({"found": found, "reboot": reboot, "result": result,
-                        "error": error, "none": none})
-
-
-class LocalDriverWorker(QThread):
-    done = pyqtSignal(object)
-
-    def __init__(self, folder, parent=None):
-        super().__init__(parent)
-        self.folder = folder
-
-    def run(self):
-        if sys.platform != "win32":
-            self.done.emit({"error": "установка драйверов доступна только на Windows"})
-            return
-        pattern = os.path.join(self.folder, "*.inf")
-        try:
-            result = subprocess.run(
-                ["pnputil", "/add-driver", pattern, "/subdirs", "/install"],
-                capture_output=True, timeout=300, creationflags=CREATE_NO_WINDOW)
-            out = (result.stdout.decode("utf-8", "replace") + "\n"
-                   + result.stderr.decode("utf-8", "replace")).strip()
-            low = out.lower()
-            reboot = result.returncode == 3010 or "перезагруз" in low or "reboot" in low
-            ok = result.returncode in (0, 3010)
-            self.done.emit({"ok": ok, "output": out[:1500], "reboot": reboot,
-                            "code": result.returncode})
-        except Exception as exc:
-            self.done.emit({"error": str(exc)})
+            if line.startswith("WUA_FOUND|"):
+                installed.append(line[10:])
+            elif line == "WUA_NONE":
+                wua_none = True
+            elif line.startswith("WUA_ERR|"):
+                error = line[8:]
+            elif line.startswith("CAT_GOT|"):
+                cat_any = True
+                installed.append(f"драйвер из каталога Microsoft ({line[8:]})")
+            elif line == "REBOOT":
+                reboot = True
+        self.done.emit({"installed": installed, "reboot": reboot, "error": error,
+                        "wua_none": wua_none, "cat_any": cat_any})
 
 
 class DriversPage(BaseTestPage):
@@ -128,32 +148,18 @@ class DriversPage(BaseTestPage):
         self.busy.setRange(0, 0)
         self.busy.hide()
         self.info = QLabel("Сканирование не запускалось")
-        self.install_button = QPushButton("🔧 Скачать и установить драйверы (Windows Update)")
+        self.install_button = QPushButton("🔧 Установить недостающие драйверы (автоматически)")
         self.install_button.setObjectName("autoButton")
         self.install_button.setMinimumHeight(44)
         self.install_button.clicked.connect(self.start_install)
         self.install_button.hide()
-        self.catalog_button = QPushButton("🔎 Найти драйверы по ID оборудования (каталог Microsoft)")
-        self.catalog_button.setObjectName("ghostButton")
-        self.catalog_button.setMinimumHeight(40)
-        self.catalog_button.clicked.connect(self.open_catalog)
-        self.catalog_button.hide()
-        self.local_button = QPushButton("📂 Поставить драйвер из скачанной папки")
-        self.local_button.setObjectName("ghostButton")
-        self.local_button.setMinimumHeight(40)
-        self.local_button.setToolTip("Распакуйте скачанный драйвер и укажите папку — установим все .inf через pnputil")
-        self.local_button.clicked.connect(self.pick_local)
-        self.local_button.hide()
         self.problem_list = QListWidget()
         self.body.addWidget(self.busy)
         self.body.addWidget(self.info)
         self.body.addWidget(self.install_button)
-        self.body.addWidget(self.catalog_button)
-        self.body.addWidget(self.local_button)
         self.body.addWidget(self.problem_list, 1)
         self.worker = None
         self.install_worker = None
-        self.local_worker = None
         self.hwids = []
         self._auto_mode = False
         self._install_tried = False
@@ -162,14 +168,12 @@ class DriversPage(BaseTestPage):
         self.problem_list.clear()
         self.info.setText("Сканирование не запускалось")
         self.install_button.hide()
-        self.catalog_button.hide()
-        self.local_button.hide()
         self.hwids = []
         self._auto_mode = False
         self._install_tried = False
 
     def auto_start(self):
-        # В авто-прогоне драйверы ставятся автоматически при обнаружении проблем
+        # В авто-прогоне драйверы качаются и ставятся автоматически при обнаружении проблем
         self._auto_mode = True
 
     def on_enter(self):
@@ -180,8 +184,6 @@ class DriversPage(BaseTestPage):
     def scan(self):
         self.problem_list.clear()
         self.install_button.hide()
-        self.catalog_button.hide()
-        self.local_button.hide()
         self.hwids = []
         self.busy.show()
         self.info.setText("Опрос WMI (Win32_PnPEntity)...")
@@ -216,37 +218,37 @@ class DriversPage(BaseTestPage):
         self.details = f"устройств с ошибками: {len(devices)}"
         self.summary = f"проблемных устройств: {len(devices)}"
         self.grade = "bad"
-        # Авто-прогон: сам ставим драйверы (один раз за прогон)
+        # авто-прогон: сам ставим драйверы (один раз за прогон)
         if self._auto_mode and not self._install_tried:
             self.info.setText(f"Найдено проблемных устройств: {len(devices)}. "
-                              "Устанавливаю драйверы автоматически...")
-            self.set_status("найдены проблемы — ставлю драйверы автоматически...", "warn")
+                              "Скачиваю и устанавливаю драйверы автоматически...")
             self.start_install()
             return
-        self.install_button.show()
-        self.local_button.show()
-        if self.hwids:
-            self.catalog_button.show()
-        if self._auto_mode and self._install_tried:
-            # уже пробовали поставить, но проблемы остались — завершаем, чтобы авто-прогон шёл дальше
+        if self._install_tried:
+            # уже пробовали — часть не поставилась
             self.info.setText(f"Осталось проблемных устройств: {len(devices)}. "
-                              "Windows Update не помог — найдите драйверы по ID оборудования.")
-            self.details = f"остались проблемы с драйверами: {len(devices)} (нужна установка по ID)"
-            self.finish("Не пройден", advance=True)
+                              "Не для всех нашлись драйверы в Windows Update / каталоге Microsoft.")
+            self.details = f"остались проблемы с драйверами: {len(devices)}"
+            if self._auto_mode:
+                self.finish("Не пройден", advance=True)
+                return
+            self.install_button.setText("↻ Повторить установку драйверов")
+            self.install_button.show()
+            self.set_status("часть драйверов не установлена", False)
             return
+        # ручной режим, первый показ
         self.info.setText(f"Найдено проблемных устройств: {len(devices)}. "
-                          "Установите драйверы автоматически, найдите по ID оборудования или отметьте вручную.")
+                          "Нажмите «Установить», чтобы скачать и поставить драйверы автоматически.")
+        self.install_button.show()
         self.set_status(f"найдены ошибки драйверов ({len(devices)})", False)
 
     @staticmethod
     def _catalog_query(hwid):
         # Для каталога Microsoft ищем по VEN_xxxx&DEV_xxxx (без SUBSYS/REV — иначе часто пусто)
-        import re
         ven = re.search(r"VEN_[0-9A-Fa-f]{4}", hwid)
         dev = re.search(r"DEV_[0-9A-Fa-f]{4}", hwid)
         if ven and dev:
             return f"{ven.group()}&{dev.group()}"
-        # USB и прочее: VID/PID
         vid = re.search(r"VID_[0-9A-Fa-f]{4}", hwid)
         pid = re.search(r"PID_[0-9A-Fa-f]{4}", hwid)
         if vid and pid:
@@ -263,108 +265,36 @@ class DriversPage(BaseTestPage):
             raw = device.get("DeviceID")
         return (raw or "").strip()
 
-    def open_catalog(self):
-        # Открывает официальный каталог Microsoft Update с поиском по ID (до 3 вкладок)
-        opened = 0
-        seen = set()
-        for hwid in self.hwids:
-            if opened >= 3:
-                break
-            query = self._catalog_query(hwid)
-            if not query or query in seen:
-                continue
-            seen.add(query)
-            try:
-                webbrowser.open(CATALOG_URL + urllib.parse.quote(query))
-                opened += 1
-            except Exception:
-                pass
-        if opened:
-            self.problem_list.addItem(f"🔎 Открыт каталог Microsoft для поиска по ID ({opened})")
-            self.set_status("каталог драйверов открыт в браузере — скачайте подписанный драйвер", "warn")
-
-    def pick_local(self):
-        if self.local_worker is not None:
-            return
-        folder = QFileDialog.getExistingDirectory(
-            self, "Укажите папку с распакованным драйвером (.inf)")
-        if not folder:
-            return
-        self.local_button.hide()
-        self.busy.show()
-        self.problem_list.addItem(f"📂 Установка драйверов из папки: {folder}")
-        self.set_status("установка драйвера из папки — не выключайте ноутбук...")
-        self.local_worker = LocalDriverWorker(folder, self)
-        self.local_worker.done.connect(self.on_local_done)
-        self.local_worker.start()
-
-    def on_local_done(self, result):
-        self.local_worker = None
-        self.busy.hide()
-        self.local_button.show()
-        if result.get("error"):
-            self.problem_list.addItem(f"✕ {result['error']}")
-            self.set_status("не удалось установить драйвер из папки", "warn")
-            return
-        if result.get("ok"):
-            self.problem_list.addItem("✓ Драйверы из папки установлены (pnputil)")
-            if result.get("reboot"):
-                self.problem_list.addItem("↻ Требуется перезагрузка")
-                self.set_status("драйвер установлен — требуется перезагрузка", "warn")
-                return
-            self.info.setText("Драйвер из папки установлен. Повторная проверка...")
-            self.set_status("драйвер установлен, перепроверяю...")
-            self.scan()
-        else:
-            self.problem_list.addItem(f"✕ pnputil: код {result.get('code')}. Возможно, .inf не подходят этой системе.")
-            if result.get("output"):
-                self.problem_list.addItem(result["output"].splitlines()[0][:120])
-            self.set_status("драйвер не установился (проверьте, что папка верная)", "warn")
-
     def start_install(self):
         if self.install_worker is not None:
             return
         self._install_tried = True
         self.install_button.hide()
-        self.catalog_button.hide()
-        self.local_button.hide()
         self.busy.show()
-        self.problem_list.addItem("— Поиск драйверов в Windows Update (может занять несколько минут)...")
-        self.info.setText("Идёт скачивание и установка драйверов через Windows Update...")
+        self.problem_list.addItem("— Поиск и установка драйверов (Windows Update + каталог Microsoft)...")
+        self.problem_list.addItem("   Это может занять несколько минут, не выключайте ноутбук.")
+        self.info.setText("Идёт скачивание и установка драйверов...")
         self.set_status("установка драйверов — не выключайте ноутбук...")
-        self.install_worker = DriverInstallWorker(self)
+        queries = list(dict.fromkeys(self._catalog_query(h) for h in self.hwids if h))
+        self.install_worker = DriverInstallWorker(queries, self)
         self.install_worker.done.connect(self.on_install_done)
         self.install_worker.start()
 
     def on_install_done(self, result):
         self.install_worker = None
         self.busy.hide()
-        if result.get("error"):
+        if result.get("error") and not result.get("installed"):
             self.problem_list.addItem(f"✕ {result['error']}")
-            self.local_button.show()
-            if self.hwids:
-                self.catalog_button.show()
             if self._auto_mode:
-                self.details = f"не удалось установить драйверы автоматически: {result['error']}"
+                self.details = f"не удалось установить драйверы: {result['error']}"
                 self.set_status("не удалось установить драйверы автоматически", False)
                 self.finish("Не пройден", advance=True)
                 return
+            self.install_button.setText("↻ Повторить установку драйверов")
             self.install_button.show()
-            self.set_status("не удалось установить драйверы автоматически", "warn")
+            self.set_status("не удалось установить драйверы", "warn")
             return
-        if result.get("none"):
-            self.problem_list.addItem("— В Windows Update нет драйверов — попробуйте поиск по ID оборудования")
-            self.info.setText("Windows Update не нашёл драйверов. Ищите по ID в каталоге Microsoft или на сайте производителя.")
-            self.local_button.show()
-            if self.hwids:
-                self.catalog_button.show()
-            if self._auto_mode:
-                self.details = "в Windows Update драйверов нет — нужна установка по ID"
-                self.finish("Не пройден", advance=True)
-                return
-            self.set_status("в Windows Update драйверов нет — ищите по ID", "warn")
-            return
-        for title in result.get("found", []):
+        for title in result.get("installed", []):
             self.problem_list.addItem(f"✓ Установлен: {title}")
         if result.get("reboot"):
             self.problem_list.addItem("↻ Требуется перезагрузка для завершения установки")
@@ -373,11 +303,10 @@ class DriversPage(BaseTestPage):
             self.summary = "драйверы установлены (нужна перезагрузка)"
             if self._auto_mode:
                 self.details = "драйверы установлены автоматически — требуется перезагрузка"
-                self.set_status("драйверы установлены — требуется перезагрузка", "warn")
                 self.finish("Пройден (нужна перезагрузка)", advance=True)
                 return
             self.set_status("драйверы установлены — требуется перезагрузка", "warn")
             return
-        self.info.setText("Драйверы установлены. Повторная проверка...")
-        self.set_status("драйверы установлены, перепроверяю...")
+        self.info.setText("Установка завершена. Повторная проверка...")
+        self.set_status("проверяю результат установки...")
         self.scan()
