@@ -21,14 +21,16 @@ DURATION = 120
 
 
 def _numpy_worker(stop_event):
+    # Крупные матрицы: счёт O(n^3), память O(n^2) → нагрузка счётно-ограниченная,
+    # ядра грузятся сильнее (matmul в BLAS отпускает GIL → реальная параллельность).
     try:
-        size = 768
+        size = 1100
         a = np.random.rand(size, size)
         b = np.random.rand(size, size)
         while not stop_event.is_set():
             c = a.dot(b)
-            c = np.sin(c) + np.sqrt(np.abs(c) + 1.0)
-            a = c / (np.max(c) + 1e-9)
+            c = c.dot(b)
+            a = c * (1.0 / (np.abs(c).max() + 1e-9))
     except Exception:
         pass
 
@@ -103,7 +105,7 @@ FRAGMENT_SHADER = (
     "void main() {\n"
     "  vec2 uv = gl_FragCoord.xy / uRes;\n"
     "  float v = 0.0;\n"
-    "  for (int i = 0; i < 500; i++) {\n"
+    "  for (int i = 0; i < 1800; i++) {\n"
     "    float fi = float(i);\n"
     "    v += sin(uv.x * 42.0 + uTime + fi) * cos(uv.y * 42.0 - uTime - fi);\n"
     "    v = fract(v * 1.37 + 0.11);\n"
@@ -225,7 +227,7 @@ def make_gpu_widget():
                 return
             self.active = True
             self.frame = 0
-            self.timer.start(33)
+            self.timer.start(4)
 
         def stop(self):
             self.active = False
