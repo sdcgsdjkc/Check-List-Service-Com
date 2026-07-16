@@ -275,16 +275,17 @@ def make_gpu_widget():
                 glClear(GL_COLOR_BUFFER_BIT)
                 if not (self.active and self.linked):
                     return
-                # Адаптив (агрессивный): целимся в тяжёлый кадр ~35-70 мс — грузим GPU
-                # по максимуму. Запас до порога TDR (~2 c) огромный. Слабая GPU сама
-                # снизит итерации, мощная — раскочегарит до потолка.
+                # vsync выключен → GPU и так грузится на 100% (слабая просто медленнее).
+                # Нагрузку под слабых НЕ снижаем. Итерации только наращиваем на быстрых
+                # GPU (больше меха = больше тепла/энергопотребления = честнее стресс).
+                # Снижение — лишь аварийное, если кадр приблизился к порогу сброса драйвера.
                 now = time.perf_counter()
                 if self._last_t is not None:
                     dt_ms = (now - self._last_t) * 1000.0
-                    if dt_ms > 70.0:
-                        self.iters = max(200, int(self.iters * 0.9))
-                    elif dt_ms < 35.0:
-                        self.iters = min(60000, int(self.iters * 1.22) + 40)
+                    if dt_ms > 900.0:
+                        self.iters = max(300, int(self.iters * 0.8))   # защита от TDR
+                    elif dt_ms < 120.0:
+                        self.iters = min(60000, int(self.iters * 1.15) + 40)
                 self._last_t = now
                 self.program.bind()
                 self.program.setUniformValue1f(self.program.uniformLocation("uTime"), self.frame * 0.05)
@@ -335,6 +336,7 @@ def make_gpu_widget():
     fmt = QSurfaceFormat()
     fmt.setProfile(QSurfaceFormat.OpenGLContextProfile.CoreProfile)
     fmt.setVersion(3, 3)
+    fmt.setSwapInterval(0)  # выключаем vsync — GPU рендерит непрерывно (100% на любом железе, как FurMark)
     try:
         fmt.setOption(QSurfaceFormat.FormatOption.ResetNotification)
     except Exception:
