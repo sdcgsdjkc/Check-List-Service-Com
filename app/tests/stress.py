@@ -1,4 +1,5 @@
 import threading
+import time
 from collections import deque
 
 import psutil
@@ -20,11 +21,10 @@ except Exception:
 DURATION = 120
 
 
-def _numpy_worker(stop_event):
+def _numpy_worker(stop_event, size=1100):
     # Крупные матрицы: счёт O(n^3), память O(n^2) → нагрузка счётно-ограниченная,
     # ядра грузятся сильнее (matmul в BLAS отпускает GIL → реальная параллельность).
     try:
-        size = 1100
         a = np.random.rand(size, size)
         b = np.random.rand(size, size)
         while not stop_event.is_set():
@@ -68,11 +68,26 @@ class StressEngine:
     def start(self):
         cores = psutil.cpu_count() or 4
         self.stop_thread = threading.Event()
-        worker = _numpy_worker if np is not None else _python_worker
-        label = ("матричные вычисления FP (numpy)" if np is not None
+        use_numpy = np is not None
+        # Размер матриц под систему: слабым (мало ОЗУ) — меньше (без свопа),
+        # мощным — больше (сильнее счётная нагрузка). Потоки = числу ядер.
+        size = 1100
+        if use_numpy:
+            try:
+                total_gb = psutil.virtual_memory().total / 1024 ** 3
+                per_thread_gb = total_gb / max(1, cores)
+                if total_gb < 5 or per_thread_gb < 0.6:
+                    size = 800
+                elif total_gb >= 16 and per_thread_gb >= 1.2:
+                    size = 1500
+            except Exception:
+                size = 1100
+        label = (f"матричные вычисления FP {size}×{size} (numpy)" if use_numpy
                  else "вычислительные потоки CPU")
         for _ in range(cores):
-            thread = threading.Thread(target=worker, args=(self.stop_thread,), daemon=True)
+            args = (self.stop_thread, size) if use_numpy else (self.stop_thread,)
+            worker = _numpy_worker if use_numpy else _python_worker
+            thread = threading.Thread(target=worker, args=args, daemon=True)
             thread.start()
             self.threads.append(thread)
         self.vectors.append(f"{cores} потоков — {label}")
@@ -101,11 +116,12 @@ FRAGMENT_SHADER = (
     "#version 330 core\n"
     "uniform float uTime;\n"
     "uniform vec2 uRes;\n"
+    "uniform int uIter;\n"
     "out vec4 fragColor;\n"
     "void main() {\n"
     "  vec2 uv = gl_FragCoord.xy / uRes;\n"
     "  float v = 0.0;\n"
-    "  for (int i = 0; i < 1800; i++) {\n"
+    "  for (int i = 0; i < uIter; i++) {\n"
     "    float fi = float(i);\n"
     "    v += sin(uv.x * 42.0 + uTime + fi) * cos(uv.y * 42.0 - uTime - fi);\n"
     "    v = fract(v * 1.37 + 0.11);\n"
@@ -141,6 +157,8 @@ def make_gpu_widget():
             self.dead = False
             self.linked = False
             self.frame = 0
+            self.iters = 400
+            self._last_t = None
             self.program = None
             self.vao = None
             self.timer = QTimer(self)
@@ -192,8 +210,20 @@ def make_gpu_widget():
                 glClear(GL_COLOR_BUFFER_BIT)
                 if not (self.active and self.linked):
                     return
+                # Адаптив: держим время кадра ~10-20 мс — грузим GPU по максимуму,
+                # но безопасно (далеко от порога TDR ~2 c). Слабая GPU → меньше итераций,
+                # мощная → больше. Само подстраивается под любое железо.
+                now = time.perf_counter()
+                if self._last_t is not None:
+                    dt_ms = (now - self._last_t) * 1000.0
+                    if dt_ms > 20.0:
+                        self.iters = max(120, int(self.iters * 0.85))
+                    elif dt_ms < 10.0:
+                        self.iters = min(12000, int(self.iters * 1.12) + 12)
+                self._last_t = now
                 self.program.bind()
                 self.program.setUniformValue1f(self.program.uniformLocation("uTime"), self.frame * 0.05)
+                self.program.setUniformValue1i(self.program.uniformLocation("uIter"), int(self.iters))
                 self.program.setUniformValue(self.program.uniformLocation("uRes"),
                                              QVector2D(float(self.width()), float(self.height())))
                 self.vao.bind()
@@ -227,6 +257,8 @@ def make_gpu_widget():
                 return
             self.active = True
             self.frame = 0
+            self.iters = 400
+            self._last_t = None
             self.timer.start(4)
 
         def stop(self):
