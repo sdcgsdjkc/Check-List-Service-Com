@@ -113,6 +113,7 @@ class MemoryPage(BaseTestPage):
         self.bar = QProgressBar()
         self.bar.setRange(0, 100)
         self.info = QLabel("Тест не запускался")
+        self.info.setWordWrap(True)
         self.modules_label = QLabel("Модули: считываются...")
         self.modules_label.setObjectName("specLabel")
         self.modules_label.setWordWrap(True)
@@ -161,4 +162,4 @@ class MemoryPage(BaseTestPage):
             self.auto_ok(details)
         else:
             self.details = details
-            self.set_status(details, False)
+            self.set_status("обнаружены ошибки ОЗУ — рекомендуется замена модуля", False)
