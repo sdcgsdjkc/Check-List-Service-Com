@@ -1,12 +1,14 @@
 import json
+import os
+import subprocess
 import sys
 import urllib.parse
 import webbrowser
 
 from PyQt6.QtCore import QThread, pyqtSignal
-from PyQt6.QtWidgets import QLabel, QListWidget, QProgressBar, QPushButton
+from PyQt6.QtWidgets import QFileDialog, QLabel, QListWidget, QProgressBar, QPushButton
 
-from app.sysinfo import _powershell
+from app.sysinfo import CREATE_NO_WINDOW, _powershell
 from app.tests.base import BaseTestPage
 
 CATALOG_URL = "https://www.catalog.update.microsoft.com/Search.aspx?q="
@@ -89,6 +91,33 @@ class DriverInstallWorker(QThread):
                         "error": error, "none": none})
 
 
+class LocalDriverWorker(QThread):
+    done = pyqtSignal(object)
+
+    def __init__(self, folder, parent=None):
+        super().__init__(parent)
+        self.folder = folder
+
+    def run(self):
+        if sys.platform != "win32":
+            self.done.emit({"error": "установка драйверов доступна только на Windows"})
+            return
+        pattern = os.path.join(self.folder, "*.inf")
+        try:
+            result = subprocess.run(
+                ["pnputil", "/add-driver", pattern, "/subdirs", "/install"],
+                capture_output=True, timeout=300, creationflags=CREATE_NO_WINDOW)
+            out = (result.stdout.decode("utf-8", "replace") + "\n"
+                   + result.stderr.decode("utf-8", "replace")).strip()
+            low = out.lower()
+            reboot = result.returncode == 3010 or "перезагруз" in low or "reboot" in low
+            ok = result.returncode in (0, 3010)
+            self.done.emit({"ok": ok, "output": out[:1500], "reboot": reboot,
+                            "code": result.returncode})
+        except Exception as exc:
+            self.done.emit({"error": str(exc)})
+
+
 class DriversPage(BaseTestPage):
     title = "Драйверы"
     auto = True
@@ -109,14 +138,22 @@ class DriversPage(BaseTestPage):
         self.catalog_button.setMinimumHeight(40)
         self.catalog_button.clicked.connect(self.open_catalog)
         self.catalog_button.hide()
+        self.local_button = QPushButton("📂 Поставить драйвер из скачанной папки")
+        self.local_button.setObjectName("ghostButton")
+        self.local_button.setMinimumHeight(40)
+        self.local_button.setToolTip("Распакуйте скачанный драйвер и укажите папку — установим все .inf через pnputil")
+        self.local_button.clicked.connect(self.pick_local)
+        self.local_button.hide()
         self.problem_list = QListWidget()
         self.body.addWidget(self.busy)
         self.body.addWidget(self.info)
         self.body.addWidget(self.install_button)
         self.body.addWidget(self.catalog_button)
+        self.body.addWidget(self.local_button)
         self.body.addWidget(self.problem_list, 1)
         self.worker = None
         self.install_worker = None
+        self.local_worker = None
         self.hwids = []
         self._auto_mode = False
         self._install_tried = False
@@ -126,6 +163,7 @@ class DriversPage(BaseTestPage):
         self.info.setText("Сканирование не запускалось")
         self.install_button.hide()
         self.catalog_button.hide()
+        self.local_button.hide()
         self.hwids = []
         self._auto_mode = False
         self._install_tried = False
@@ -143,6 +181,7 @@ class DriversPage(BaseTestPage):
         self.problem_list.clear()
         self.install_button.hide()
         self.catalog_button.hide()
+        self.local_button.hide()
         self.hwids = []
         self.busy.show()
         self.info.setText("Опрос WMI (Win32_PnPEntity)...")
@@ -185,6 +224,7 @@ class DriversPage(BaseTestPage):
             self.start_install()
             return
         self.install_button.show()
+        self.local_button.show()
         if self.hwids:
             self.catalog_button.show()
         if self._auto_mode and self._install_tried:
@@ -243,12 +283,51 @@ class DriversPage(BaseTestPage):
             self.problem_list.addItem(f"🔎 Открыт каталог Microsoft для поиска по ID ({opened})")
             self.set_status("каталог драйверов открыт в браузере — скачайте подписанный драйвер", "warn")
 
+    def pick_local(self):
+        if self.local_worker is not None:
+            return
+        folder = QFileDialog.getExistingDirectory(
+            self, "Укажите папку с распакованным драйвером (.inf)")
+        if not folder:
+            return
+        self.local_button.hide()
+        self.busy.show()
+        self.problem_list.addItem(f"📂 Установка драйверов из папки: {folder}")
+        self.set_status("установка драйвера из папки — не выключайте ноутбук...")
+        self.local_worker = LocalDriverWorker(folder, self)
+        self.local_worker.done.connect(self.on_local_done)
+        self.local_worker.start()
+
+    def on_local_done(self, result):
+        self.local_worker = None
+        self.busy.hide()
+        self.local_button.show()
+        if result.get("error"):
+            self.problem_list.addItem(f"✕ {result['error']}")
+            self.set_status("не удалось установить драйвер из папки", "warn")
+            return
+        if result.get("ok"):
+            self.problem_list.addItem("✓ Драйверы из папки установлены (pnputil)")
+            if result.get("reboot"):
+                self.problem_list.addItem("↻ Требуется перезагрузка")
+                self.set_status("драйвер установлен — требуется перезагрузка", "warn")
+                return
+            self.info.setText("Драйвер из папки установлен. Повторная проверка...")
+            self.set_status("драйвер установлен, перепроверяю...")
+            self.scan()
+        else:
+            self.problem_list.addItem(f"✕ pnputil: код {result.get('code')}. Возможно, .inf не подходят этой системе.")
+            if result.get("output"):
+                self.problem_list.addItem(result["output"].splitlines()[0][:120])
+            self.set_status("драйвер не установился (проверьте, что папка верная)", "warn")
+
     def start_install(self):
         if self.install_worker is not None:
             return
         self._install_tried = True
         self.install_button.hide()
         self.catalog_button.hide()
+        self.local_button.hide()
         self.busy.show()
         self.problem_list.addItem("— Поиск драйверов в Windows Update (может занять несколько минут)...")
         self.info.setText("Идёт скачивание и установка драйверов через Windows Update...")
@@ -262,6 +341,7 @@ class DriversPage(BaseTestPage):
         self.busy.hide()
         if result.get("error"):
             self.problem_list.addItem(f"✕ {result['error']}")
+            self.local_button.show()
             if self.hwids:
                 self.catalog_button.show()
             if self._auto_mode:
@@ -275,6 +355,7 @@ class DriversPage(BaseTestPage):
         if result.get("none"):
             self.problem_list.addItem("— В Windows Update нет драйверов — попробуйте поиск по ID оборудования")
             self.info.setText("Windows Update не нашёл драйверов. Ищите по ID в каталоге Microsoft или на сайте производителя.")
+            self.local_button.show()
             if self.hwids:
                 self.catalog_button.show()
             if self._auto_mode:
