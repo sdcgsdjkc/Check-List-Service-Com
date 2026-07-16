@@ -157,7 +157,7 @@ def make_gpu_widget():
             self.dead = False
             self.linked = False
             self.frame = 0
-            self.iters = 400
+            self.iters = 800
             self._last_t = None
             self.program = None
             self.vao = None
@@ -210,16 +210,16 @@ def make_gpu_widget():
                 glClear(GL_COLOR_BUFFER_BIT)
                 if not (self.active and self.linked):
                     return
-                # Адаптив: держим время кадра ~10-20 мс — грузим GPU по максимуму,
-                # но безопасно (далеко от порога TDR ~2 c). Слабая GPU → меньше итераций,
-                # мощная → больше. Само подстраивается под любое железо.
+                # Адаптив (агрессивный): целимся в тяжёлый кадр ~35-70 мс — грузим GPU
+                # по максимуму. Запас до порога TDR (~2 c) огромный. Слабая GPU сама
+                # снизит итерации, мощная — раскочегарит до потолка.
                 now = time.perf_counter()
                 if self._last_t is not None:
                     dt_ms = (now - self._last_t) * 1000.0
-                    if dt_ms > 20.0:
-                        self.iters = max(120, int(self.iters * 0.85))
-                    elif dt_ms < 10.0:
-                        self.iters = min(12000, int(self.iters * 1.12) + 12)
+                    if dt_ms > 70.0:
+                        self.iters = max(200, int(self.iters * 0.9))
+                    elif dt_ms < 35.0:
+                        self.iters = min(60000, int(self.iters * 1.22) + 40)
                 self._last_t = now
                 self.program.bind()
                 self.program.setUniformValue1f(self.program.uniformLocation("uTime"), self.frame * 0.05)
@@ -257,7 +257,7 @@ def make_gpu_widget():
                 return
             self.active = True
             self.frame = 0
-            self.iters = 400
+            self.iters = 800
             self._last_t = None
             self.timer.start(4)
 
