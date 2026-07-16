@@ -118,6 +118,8 @@ class DriversPage(BaseTestPage):
         self.worker = None
         self.install_worker = None
         self.hwids = []
+        self._auto_mode = False
+        self._install_tried = False
 
     def reset_state(self):
         self.problem_list.clear()
@@ -125,6 +127,12 @@ class DriversPage(BaseTestPage):
         self.install_button.hide()
         self.catalog_button.hide()
         self.hwids = []
+        self._auto_mode = False
+        self._install_tried = False
+
+    def auto_start(self):
+        # В авто-прогоне драйверы ставятся автоматически при обнаружении проблем
+        self._auto_mode = True
 
     def on_enter(self):
         if self.worker is not None or self.install_worker is not None:
@@ -166,14 +174,28 @@ class DriversPage(BaseTestPage):
                 self.problem_list.addItem(f"⚠ {name} — код {code}\n      ID: {hwid}")
             else:
                 self.problem_list.addItem(f"⚠ {name} — код ошибки {code}")
-        self.info.setText(f"Найдено проблемных устройств: {len(devices)}. "
-                          "Установите драйверы автоматически, найдите по ID оборудования или отметьте вручную.")
         self.details = f"устройств с ошибками: {len(devices)}"
         self.summary = f"проблемных устройств: {len(devices)}"
         self.grade = "bad"
+        # Авто-прогон: сам ставим драйверы (один раз за прогон)
+        if self._auto_mode and not self._install_tried:
+            self.info.setText(f"Найдено проблемных устройств: {len(devices)}. "
+                              "Устанавливаю драйверы автоматически...")
+            self.set_status("найдены проблемы — ставлю драйверы автоматически...", "warn")
+            self.start_install()
+            return
         self.install_button.show()
         if self.hwids:
             self.catalog_button.show()
+        if self._auto_mode and self._install_tried:
+            # уже пробовали поставить, но проблемы остались — завершаем, чтобы авто-прогон шёл дальше
+            self.info.setText(f"Осталось проблемных устройств: {len(devices)}. "
+                              "Windows Update не помог — найдите драйверы по ID оборудования.")
+            self.details = f"остались проблемы с драйверами: {len(devices)} (нужна установка по ID)"
+            self.finish("Не пройден", advance=True)
+            return
+        self.info.setText(f"Найдено проблемных устройств: {len(devices)}. "
+                          "Установите драйверы автоматически, найдите по ID оборудования или отметьте вручную.")
         self.set_status(f"найдены ошибки драйверов ({len(devices)})", False)
 
     @staticmethod
@@ -224,6 +246,7 @@ class DriversPage(BaseTestPage):
     def start_install(self):
         if self.install_worker is not None:
             return
+        self._install_tried = True
         self.install_button.hide()
         self.catalog_button.hide()
         self.busy.show()
@@ -239,9 +262,14 @@ class DriversPage(BaseTestPage):
         self.busy.hide()
         if result.get("error"):
             self.problem_list.addItem(f"✕ {result['error']}")
-            self.install_button.show()
             if self.hwids:
                 self.catalog_button.show()
+            if self._auto_mode:
+                self.details = f"не удалось установить драйверы автоматически: {result['error']}"
+                self.set_status("не удалось установить драйверы автоматически", False)
+                self.finish("Не пройден", advance=True)
+                return
+            self.install_button.show()
             self.set_status("не удалось установить драйверы автоматически", "warn")
             return
         if result.get("none"):
@@ -249,6 +277,10 @@ class DriversPage(BaseTestPage):
             self.info.setText("Windows Update не нашёл драйверов. Ищите по ID в каталоге Microsoft или на сайте производителя.")
             if self.hwids:
                 self.catalog_button.show()
+            if self._auto_mode:
+                self.details = "в Windows Update драйверов нет — нужна установка по ID"
+                self.finish("Не пройден", advance=True)
+                return
             self.set_status("в Windows Update драйверов нет — ищите по ID", "warn")
             return
         for title in result.get("found", []):
@@ -256,6 +288,13 @@ class DriversPage(BaseTestPage):
         if result.get("reboot"):
             self.problem_list.addItem("↻ Требуется перезагрузка для завершения установки")
             self.info.setText("Драйверы установлены. Нужна перезагрузка, затем проверьте снова.")
+            self.grade = "warn"
+            self.summary = "драйверы установлены (нужна перезагрузка)"
+            if self._auto_mode:
+                self.details = "драйверы установлены автоматически — требуется перезагрузка"
+                self.set_status("драйверы установлены — требуется перезагрузка", "warn")
+                self.finish("Пройден (нужна перезагрузка)", advance=True)
+                return
             self.set_status("драйверы установлены — требуется перезагрузка", "warn")
             return
         self.info.setText("Драйверы установлены. Повторная проверка...")
