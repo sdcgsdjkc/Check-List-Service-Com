@@ -112,33 +112,88 @@ VERTEX_SHADER = (
     "}\n"
 )
 
-FRAGMENT_SHADER = (
-    "#version 330 core\n"
-    "uniform float uTime;\n"
-    "uniform vec2 uRes;\n"
-    "uniform int uIter;\n"
-    "out vec4 fragColor;\n"
-    "void main() {\n"
-    "  vec2 q = (gl_FragCoord.xy / uRes) * 2.0 - 1.0;\n"
-    "  q.x *= uRes.x / uRes.y;\n"
-    "  float t = uTime;\n"
-    "  float v = 0.0;\n"
-    "  float amp = 1.0;\n"
-    "  float freq = 2.2;\n"
-    "  vec2 p = q;\n"
-    "  for (int i = 0; i < uIter; i++) {\n"
-    "    float fi = float(i);\n"
-    "    p += 0.35 * amp * vec2(sin(p.y * freq + t), cos(p.x * freq - t));\n"
-    "    v += amp * sin(p.x * freq + t + fi * 0.0007) * sin(p.y * freq - t);\n"
-    "    freq *= 1.0009;\n"
-    "    amp *= 0.9994;\n"
-    "  }\n"
-    "  float g = length(q) * 0.6;\n"
-    "  vec3 col = 0.5 + 0.5 * cos(6.28318 * (vec3(0.0, 0.35, 0.62) + v * 0.4 - g + t * 0.05));\n"
-    "  col *= 1.05 - 0.35 * length(q);\n"
-    "  fragColor = vec4(col, 1.0);\n"
-    "}\n"
-)
+FRAGMENT_SHADER = """#version 330 core
+uniform float uTime;
+uniform vec2 uRes;
+uniform int uIter;
+out vec4 fragColor;
+
+float hash13(vec3 p) {
+    p = fract(p * 0.3183099 + 0.1);
+    p *= 17.0;
+    return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+}
+
+float noise(vec3 x) {
+    vec3 i = floor(x);
+    vec3 f = fract(x);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(mix(hash13(i + vec3(0,0,0)), hash13(i + vec3(1,0,0)), f.x),
+                   mix(hash13(i + vec3(0,1,0)), hash13(i + vec3(1,1,0)), f.x), f.y),
+               mix(mix(hash13(i + vec3(0,0,1)), hash13(i + vec3(1,0,1)), f.x),
+                   mix(hash13(i + vec3(0,1,1)), hash13(i + vec3(1,1,1)), f.x), f.y), f.z);
+}
+
+mat2 rot(float a) { float c = cos(a), s = sin(a); return mat2(c, -s, s, c); }
+
+vec3 twist(vec3 p, float t) {
+    p.xz = rot(t) * p.xz;
+    p.xy = rot(t * 0.6) * p.xy;
+    return p;
+}
+
+float sdTorus(vec3 p) {
+    vec2 q = vec2(length(p.xz) - 1.0, p.y);
+    return length(q) - 0.42;
+}
+
+void main() {
+    vec2 uv = (gl_FragCoord.xy * 2.0 - uRes) / uRes.y;
+    float t = uTime * 0.5;
+    vec3 ro = vec3(0.0, 0.0, -3.2);
+    vec3 rd = normalize(vec3(uv, 1.7));
+
+    float d = 0.0;
+    float hit = -1.0;
+    vec3 pos = ro;
+    for (int i = 0; i < 110; i++) {
+        pos = ro + rd * d;
+        float dist = sdTorus(twist(pos, t));
+        if (dist < 0.004) { hit = d; break; }
+        d += dist * 0.85;
+        if (d > 9.0) break;
+    }
+
+    vec3 col = vec3(0.04, 0.045, 0.06) + 0.02 * uv.y;
+    if (hit > 0.0) {
+        vec3 q = twist(pos, t);
+        vec2 e = vec2(0.001, 0.0);
+        vec3 n = normalize(vec3(
+            sdTorus(q + e.xyy) - sdTorus(q - e.xyy),
+            sdTorus(q + e.yxy) - sdTorus(q - e.yxy),
+            sdTorus(q + e.yyx) - sdTorus(q - e.yyx)));
+
+        // Мех: множество прядей-сэмплов вдоль нормали (тяжёлая + «волосатая» часть)
+        int steps = clamp(uIter, 24, 3000);
+        float fur = 0.0;
+        for (int i = 0; i < steps; i++) {
+            float fi = float(i) / float(steps);
+            vec3 sp = q + n * fi * 0.16;
+            float strand = noise(sp * 46.0 + vec3(0.0, 0.0, t * 3.0));
+            fur += smoothstep(0.62, 0.98, strand) * (1.0 - fi);
+        }
+        fur = fur / (float(steps) * 0.14);
+
+        vec3 ld = normalize(vec3(0.7, 0.9, -0.6));
+        float lig = max(dot(n, ld), 0.0);
+        float rim = pow(1.0 - max(dot(n, -rd), 0.0), 2.5);
+        vec3 base = 0.5 + 0.5 * cos(6.28318 * (vec3(0.0, 0.33, 0.62) + q.x * 0.35 + q.y * 0.2 + t * 0.15));
+        col = base * (0.22 + lig) * (0.35 + fur) + rim * vec3(0.5, 0.7, 1.0) * 0.6;
+    }
+    col = pow(clamp(col, 0.0, 1.0), vec3(0.85));
+    fragColor = vec4(col, 1.0);
+}
+"""
 
 
 def make_gpu_widget():
