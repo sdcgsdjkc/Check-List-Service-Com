@@ -70,22 +70,25 @@ class StressEngine:
         cores = psutil.cpu_count() or 4
         self.stop_thread = threading.Event()
         use_numpy = np is not None
-        # Размер матриц под систему: слабым (мало ОЗУ) — меньше (без свопа),
-        # мощным — больше (сильнее счётная нагрузка). Потоки = числу ядер.
+        # Потоки масштабируем под число ядер: небольшой избыток (~12%) затыкает провалы
+        # GIL на Python-склейке между matmul → загрузка близко к 100% (проверено замером).
+        # Больше — трэшинг. Работает и на 2, и на 32 ядрах.
+        if use_numpy:
+            n_threads = cores + max(2, cores // 8)
+        else:
+            n_threads = cores
+        # Размер матриц под систему: мало ОЗУ → меньше (без свопа), много → больше.
         size = 1100
         if use_numpy:
             try:
                 total_gb = psutil.virtual_memory().total / 1024 ** 3
-                per_thread_gb = total_gb / max(1, cores)
-                if total_gb < 5 or per_thread_gb < 0.6:
+                per_thread_gb = total_gb / max(1, n_threads)
+                if total_gb < 5 or per_thread_gb < 0.5:
                     size = 800
-                elif total_gb >= 16 and per_thread_gb >= 1.2:
+                elif total_gb >= 16 and per_thread_gb >= 1.0:
                     size = 1500
             except Exception:
                 size = 1100
-        # cores+2 потоков: лишние два затыкают провалы GIL на Python-склейке между matmul,
-        # что даёт загрузку CPU близко к 100% (проверено замером). Больше — уже трэшинг.
-        n_threads = cores + 2 if use_numpy else cores
         label = (f"матричные вычисления FP {size}×{size} (numpy)" if use_numpy
                  else "вычислительные потоки CPU")
         for _ in range(n_threads):
