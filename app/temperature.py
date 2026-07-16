@@ -3,10 +3,14 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
 
 from app.resources import resource_path
 
 _state = {"tried": False, "computer": None, "sensor_type": None}
+# LHM Computer/hardware.Update() не потокобезопасен — сериализуем доступ (прогрев в SpecsWorker
+# и опрос в SensorWorker стресс-теста идут из разных потоков).
+_lock = threading.Lock()
 
 
 def _stable_dir():
@@ -65,47 +69,49 @@ def _init():
 
 
 def read_temperature():
-    if not _init():
-        return None
-    computer = _state["computer"]
-    temperature_type = _state["sensor_type"].Temperature
-    try:
-        best = None
-        for hardware in computer.Hardware:
-            hardware.Update()
-            for sensor in hardware.Sensors:
-                if sensor.SensorType == temperature_type and sensor.Value is not None:
-                    value = float(sensor.Value)
-                    if 0 < value < 130:
-                        best = value if best is None else max(best, value)
-        return round(best, 1) if best is not None else None
-    except Exception:
-        return None
+    with _lock:
+        if not _init():
+            return None
+        computer = _state["computer"]
+        temperature_type = _state["sensor_type"].Temperature
+        try:
+            best = None
+            for hardware in computer.Hardware:
+                hardware.Update()
+                for sensor in hardware.Sensors:
+                    if sensor.SensorType == temperature_type and sensor.Value is not None:
+                        value = float(sensor.Value)
+                        if 0 < value < 130:
+                            best = value if best is None else max(best, value)
+            return round(best, 1) if best is not None else None
+        except Exception:
+            return None
 
 
 def read_gpu():
-    if not _init():
-        return None
-    computer = _state["computer"]
-    try:
-        for hardware in computer.Hardware:
-            if "gpu" not in str(hardware.HardwareType).lower():
-                continue
-            hardware.Update()
-            load = temp = None
-            for sensor in hardware.Sensors:
-                if sensor.Value is None:
+    with _lock:
+        if not _init():
+            return None
+        computer = _state["computer"]
+        try:
+            for hardware in computer.Hardware:
+                if "gpu" not in str(hardware.HardwareType).lower():
                     continue
-                stype = str(sensor.SensorType).lower()
-                sname = str(sensor.Name).lower()
-                if stype == "load" and "core" in sname and load is None:
-                    load = round(float(sensor.Value), 1)
-                elif stype == "temperature" and "hot" not in sname and temp is None:
-                    temp = round(float(sensor.Value), 1)
-            return {"name": str(hardware.Name), "load": load, "temp": temp, "present": True}
-        return {"name": None, "load": None, "temp": None, "present": False}
-    except Exception:
-        return None
+                hardware.Update()
+                load = temp = None
+                for sensor in hardware.Sensors:
+                    if sensor.Value is None:
+                        continue
+                    stype = str(sensor.SensorType).lower()
+                    sname = str(sensor.Name).lower()
+                    if stype == "load" and "core" in sname and load is None:
+                        load = round(float(sensor.Value), 1)
+                    elif stype == "temperature" and "hot" not in sname and temp is None:
+                        temp = round(float(sensor.Value), 1)
+                return {"name": str(hardware.Name), "load": load, "temp": temp, "present": True}
+            return {"name": None, "load": None, "temp": None, "present": False}
+        except Exception:
+            return None
 
 
 def close():

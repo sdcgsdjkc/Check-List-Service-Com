@@ -117,21 +117,27 @@ class NetworkPage(BaseTestPage):
         self.info.setText(f"Активных адаптеров: {len(interfaces)}. {note}"
                           + (f". {bt_text}" if bt_text else ""))
         if not interfaces:
+            # нет сетевых адаптеров — это аппаратная проблема
             self.details = "активные сетевые адаптеры не найдены" + detail_bt
             self.summary = "адаптеры не найдены" + summary_bt
             self.grade = "bad"
             self.set_status("активные адаптеры не найдены", False)
+            self.finish("Не пройден", advance=True)
             return
-        if ok:
-            self.grade = "warn" if bt_state == "warn" else "ok"
+        # адаптеры есть → железо в порядке. Интернет/BT — доп. проверки (warn, не fail),
+        # чтобы на оффлайн-стенде тест не валился и авто-прогон не вис.
+        if ok and bt_state != "warn":
+            self.grade = "ok"
             self.summary = f"адаптеров: {len(interfaces)} · интернет есть" + summary_bt
-            if bt_state == "warn":
-                self.details = f"адаптеров: {len(interfaces)}; {note}{detail_bt}"
-                self.set_status(f"сеть в порядке, но {bt_text.lower()}", "warn")
-            else:
-                self.auto_ok(f"адаптеров: {len(interfaces)}; {note}{detail_bt}")
+            self.auto_ok(f"адаптеров: {len(interfaces)}; {note}{detail_bt}")
+            return
+        self.grade = "warn"
+        if not ok:
+            self.summary = f"адаптеров: {len(interfaces)} · интернет недоступен" + summary_bt
+            reason = f"интернет недоступен ({note})"
         else:
-            self.details = note + detail_bt
-            self.summary = f"адаптеров: {len(interfaces)} · нет интернета" + summary_bt
-            self.grade = "warn"
-            self.set_status(note, False)
+            self.summary = f"адаптеров: {len(interfaces)} · интернет есть" + summary_bt
+            reason = bt_text.lower()
+        self.details = f"адаптеров: {len(interfaces)}; {note}{detail_bt}"
+        self.set_status(f"железо сети в порядке, но {reason}", "warn")
+        self.finish("Пройден (авто)", advance=True)

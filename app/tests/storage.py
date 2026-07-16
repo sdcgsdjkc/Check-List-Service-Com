@@ -166,6 +166,7 @@ class SurfaceWorker(QThread):
                 elapsed = time.perf_counter() - start
                 if self.time_limit and elapsed >= self.time_limit:
                     break
+                read_bytes.value = 0  # сброс: на ошибке ReadFile может не записать значение
                 t0 = time.perf_counter()
                 ok = kernel.ReadFile(handle, buffer, SURFACE_BLOCK, ctypes.byref(read_bytes), None)
                 dt_ms = (time.perf_counter() - t0) * 1000.0
@@ -286,7 +287,7 @@ class SpeedWorker(QThread):
 
     def stop(self):
         self._abort = True
-        self.wait(6000)
+        self.wait(3000)
 
     def run(self):
         tempdir = tempfile.gettempdir()
@@ -492,7 +493,8 @@ class StoragePage(BaseTestPage):
         self._smart_done = False
 
     def on_enter(self):
-        if self.worker is not None or self.surface_worker is not None:
+        # при повторном входе не перечитываем SMART заново (иначе дубли + 45с PowerShell)
+        if self.worker is not None or self.surface_worker is not None or self._smart_done:
             return
         self.busy.show()
         self.info.setText("Чтение состояния накопителей (S.M.A.R.T.)...")
@@ -506,6 +508,10 @@ class StoragePage(BaseTestPage):
         self._auto_quick = True
         if self._smart_done:
             self.start_surface(120)
+        elif self.worker is None and self.surface_worker is None:
+            # SMART ещё не читался (напр. повторный вход) — запускаем чтение,
+            # _smart_ready затем сам стартует быстрый скан (т.к. _auto_quick=True)
+            self.on_enter()
 
     def _on_disks(self, disks):
         self.disks = disks
@@ -682,17 +688,24 @@ class StoragePage(BaseTestPage):
             self.summary = self.health_summary
         self.grade = "bad" if "bad" in grades else "warn" if "warn" in grades else "ok"
         combined = "; ".join(part for part in [self.health_summary, speed_text] if part)
-        if self.auto_pass and self.healthy:
+        self.details = combined
+        if self.auto_pass and self.healthy and self.grade != "bad":
             self.auto_ok(combined, advance=False)
             self.countdown = 10
             self.advance_timer.start(1000)
             self._countdown_tick(initial=True)
-        elif not self.healthy:
-            self.details = combined
-            self.set_status("есть накопители с проблемами S.M.A.R.T.", False)
-        else:
-            self.details = combined
-            self.set_status("оцените состояние дисков вручную (S.M.A.R.T. недоступен)", "warn")
+            return
+        if not self.healthy or self.grade == "bad":
+            reason = ("есть накопители с проблемами S.M.A.R.T." if not self.healthy
+                      else "провалы скорости диска — возможна деградация")
+            self.set_status(reason, False)
+            if self._auto_quick:
+                self.finish("Не пройден", advance=True)
+            return
+        # SMART недоступен, скорость в норме
+        self.set_status("оцените состояние дисков вручную (S.M.A.R.T. недоступен)", "warn")
+        if self._auto_quick:
+            self.finish("Пройден (авто)", advance=True)
 
     def _countdown_tick(self, initial=False):
         if not initial:

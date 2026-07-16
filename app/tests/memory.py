@@ -163,3 +163,4 @@ class MemoryPage(BaseTestPage):
         else:
             self.details = details
             self.set_status("обнаружены ошибки ОЗУ — рекомендуется замена модуля", False)
+            self.finish("Не пройден", advance=True)

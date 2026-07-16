@@ -51,7 +51,7 @@ def check_access():
         context = _ssl_context()
         request = urllib.request.Request(
             _access_url(), headers={"User-Agent": "ServiceCom", "Cache-Control": "no-cache"})
-        with urllib.request.urlopen(request, timeout=6, context=context) as response:
+        with urllib.request.urlopen(request, timeout=5, context=context) as response:
             data = json.loads(response.read().decode("utf-8"))
         allowed = bool(data.get("enabled", True))
         message = str(data.get("message", "")).strip()
@@ -122,14 +122,15 @@ def check():
         request = urllib.request.Request(
             _api_url(), headers={"User-Agent": "ServiceCom",
                                  "Accept": "application/vnd.github+json"})
-        with urllib.request.urlopen(request, timeout=8, context=context) as response:
+        with urllib.request.urlopen(request, timeout=5, context=context) as response:
             data = json.loads(response.read().decode("utf-8"))
         tag = str(data.get("tag_name", "")).strip()
         asset = next((item for item in data.get("assets", [])
                       if str(item.get("name", "")).lower().endswith(".exe")), None)
         if tag and asset and _is_newer(tag, VERSION):
             notes = str(data.get("body", "")).strip()
-            return {"version": tag, "url": asset["browser_download_url"], "notes": notes[:500]}
+            return {"version": tag, "url": asset["browser_download_url"],
+                    "size": int(asset.get("size") or 0), "notes": notes[:500]}
     except Exception:
         return None
     return None
@@ -162,9 +163,10 @@ class UpdateDownloader(QThread):
     progress = pyqtSignal(int)
     done = pyqtSignal(bool, str)
 
-    def __init__(self, url, parent=None):
+    def __init__(self, url, expected_size=0, parent=None):
         super().__init__(parent)
         self.url = url
+        self.expected_size = int(expected_size or 0)
 
     def run(self):
         target, _ = update_target()
@@ -187,8 +189,10 @@ class UpdateDownloader(QThread):
                         got += len(chunk)
                         if total:
                             self.progress.emit(min(100, int(got * 100 / total)))
-            if total and got != total:
-                raise ValueError(f"закачка оборвалась ({got} из {total} байт)")
+            # сверяем с известным размером: Content-Length или размер ассета из GitHub API
+            expected = total or self.expected_size
+            if expected and got != expected:
+                raise ValueError(f"закачка оборвалась ({got} из {expected} байт)")
             if got < 100000:
                 raise ValueError("загруженный файл повреждён")
             self.progress.emit(100)

@@ -17,8 +17,15 @@ def acquire_single_instance():
     if sys.platform != "win32":
         return True
     import ctypes
-    handle = ctypes.windll.kernel32.CreateMutexW(None, False, "Global\\ServiceComDiag_SingleInstance")
-    if not handle or ctypes.windll.kernel32.GetLastError() == 183:
+    from ctypes import wintypes
+    kernel = ctypes.windll.kernel32
+    kernel.CreateMutexW.restype = wintypes.HANDLE
+    kernel.CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
+    handle = kernel.CreateMutexW(None, False, "Global\\ServiceComDiag_SingleInstance")
+    already = kernel.GetLastError() == 183  # ERROR_ALREADY_EXISTS
+    if not handle or already:
+        if handle:
+            kernel.CloseHandle(handle)
         return False
     _mutex_handle.append(handle)
     return True

@@ -243,7 +243,7 @@ def make_gpu_widget():
                     self._fail()
                     return
                 major, minor = ctx.format().version()
-                if (major, minor) < (3, 2):
+                if (major, minor) < (3, 3):  # шейдер #version 330 требует GL 3.3
                     self._fail()
                     return
                 self.program = QOpenGLShaderProgram(self)
@@ -286,17 +286,19 @@ def make_gpu_widget():
                 # Нагрузку под слабых НЕ снижаем. Итерации только наращиваем на быстрых
                 # GPU (больше меха = больше тепла/энергопотребления = честнее стресс).
                 # Снижение — лишь аварийное, если кадр приблизился к порогу сброса драйвера.
+                # Шейдер ограничивает мех clamp(uIter, 24, 3000) — выше 3000 смысла нет.
+                # Кадр держим ниже порога TDR с хорошим запасом (down при >500 мс, агрессивно).
                 now = time.perf_counter()
                 if self._last_t is not None:
                     dt_ms = (now - self._last_t) * 1000.0
-                    if dt_ms > 900.0:
-                        self.iters = max(300, int(self.iters * 0.8))   # защита от TDR
+                    if dt_ms > 500.0:
+                        self.iters = max(300, int(self.iters * 0.7))
                     elif dt_ms < 120.0:
-                        self.iters = min(60000, int(self.iters * 1.15) + 40)
+                        self.iters = min(3000, int(self.iters * 1.15) + 40)
                 self._last_t = now
                 self.program.bind()
-                self.program.setUniformValue1f(self.program.uniformLocation("uTime"), self.frame * 0.05)
-                self.program.setUniformValue1i(self.program.uniformLocation("uIter"), int(self.iters))
+                self.program.setUniformValue(self.program.uniformLocation("uTime"), float(self.frame * 0.05))
+                self.program.setUniformValue(self.program.uniformLocation("uIter"), int(self.iters))
                 self.program.setUniformValue(self.program.uniformLocation("uRes"),
                                              QVector2D(float(self.width()), float(self.height())))
                 self.vao.bind()
@@ -566,7 +568,9 @@ class StressPage(BaseTestPage):
         self.max_gpu_temp = None
         self._last_gpu_temp = None
         self._last_gpu_load = None
+        self._gpu_miss = 0
         self.monitor = None
+        self._zombies = []
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.tick)
 
@@ -615,6 +619,7 @@ class StressPage(BaseTestPage):
         self.max_gpu_temp = None
         self._last_gpu_temp = None
         self._last_gpu_load = None
+        self._gpu_miss = 0
         self.time_label.setText("—")
         self.load_label.setText("Нагрузка CPU: —")
         self.temp_label.setText("Температура: —")
@@ -651,6 +656,7 @@ class StressPage(BaseTestPage):
         self.max_gpu_temp = None
         self._last_gpu_temp = None
         self._last_gpu_load = None
+        self._gpu_miss = 0
         self.engine = StressEngine()
         self.engine.start()
         if self.engine.vectors:
@@ -706,6 +712,7 @@ class StressPage(BaseTestPage):
         if name and (load is not None or temp is not None):
             self.gpu_seen = True
             self.gpu_name = name
+            self._gpu_miss = 0
             if temp is not None:
                 self.max_gpu_temp = max(self.max_gpu_temp or 0.0, temp)
                 self._last_gpu_temp = temp
@@ -718,19 +725,38 @@ class StressPage(BaseTestPage):
                 parts.append(f"{temp:.0f} °C")
             self.gpu_label.setText("GPU: " + " · ".join(parts))
         elif self.gpu_seen and not self.gpu_dropped:
-            self.gpu_dropped = True
-            self.gpu_label.setText(f"GPU: ⚠ {self.gpu_name or 'видеоядро'} — ПЕРЕСТАЛ ОТВЕЧАТЬ ПОД НАГРУЗКОЙ")
+            # только после нескольких подряд пропусков — иначе ложное срабатывание
+            # на разовом сбое датчика (потерю контекста ловит отдельный сигнал lost)
+            self._gpu_miss += 1
+            if self._gpu_miss >= 4:
+                self.gpu_dropped = True
+                self.gpu_label.setText(f"GPU: ⚠ {self.gpu_name or 'видеоядро'} — ПЕРЕСТАЛ ОТВЕЧАТЬ ПОД НАГРУЗКОЙ")
 
     def stop_test(self, aborted):
-        self.timer.stop()
-        self.gpu.stop()
+        try:
+            self.timer.stop()
+        except Exception:
+            pass
+        try:
+            self.gpu.stop()
+        except Exception:
+            pass
         if self.monitor is not None:
-            finished = self.monitor.stop()
+            try:
+                finished = self.monitor.stop()
+            except Exception:
+                finished = False
             if finished:
                 self.monitor.deleteLater()
+            else:
+                # поток не успел завершиться — держим ссылку, чтобы не разрушить работающий QThread
+                self._zombies.append(self.monitor)
             self.monitor = None
         if self.engine is not None:
-            self.engine.stop()
+            try:
+                self.engine.stop()
+            except Exception:
+                pass
             self.engine = None
         self.start_button.setText("Старт (2 минуты)")
         self.infinite_button.setEnabled(True)

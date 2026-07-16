@@ -181,6 +181,12 @@ class DriversPage(BaseTestPage):
             return
         self.scan()
 
+    def on_leave(self):
+        # установку драйверов прерывать нельзя — дожидаемся, чтобы не разрушить работающий QThread
+        for worker in (self.worker, self.install_worker):
+            if worker is not None and worker.isRunning():
+                worker.wait(5000)
+
     def scan(self):
         self.problem_list.clear()
         self.install_button.hide()
@@ -198,6 +204,8 @@ class DriversPage(BaseTestPage):
         if devices is None:
             self.info.setText("Автоматическая проверка недоступна (WMI не отвечает)")
             self.set_status("проверьте диспетчер устройств вручную", "warn")
+            if self._auto_mode:
+                self.finish("Пропущен", advance=True)
             return
         if not devices:
             self.info.setText("Устройств с ошибками не найдено")

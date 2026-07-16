@@ -87,6 +87,7 @@ class MainWindow(QMainWindow):
         self.update_checker.start()
         self.update_downloader = None
         self.update_dialog = None
+        self.manual_checker = None
         self.access_checker = AccessChecker(self)
         self.access_checker.result.connect(self.on_access_checked)
         self.access_checker.start()
@@ -125,7 +126,7 @@ class MainWindow(QMainWindow):
         self.update_dialog.setMinimumWidth(360)
         self.update_dialog.setValue(0)
         self.update_dialog.show()
-        self.update_downloader = UpdateDownloader(info["url"], self)
+        self.update_downloader = UpdateDownloader(info["url"], info.get("size", 0), self)
         self.update_downloader.progress.connect(self.update_dialog.setValue)
         self.update_downloader.done.connect(self.on_update_done)
         self.update_downloader.start()
@@ -421,6 +422,15 @@ class MainWindow(QMainWindow):
         for page in self.pages:
             try:
                 page.on_leave()
+            except Exception:
+                pass
+        # дожидаемся фоновых потоков окна, иначе Qt рушит процесс
+        # ("QThread: Destroyed while thread is still running")
+        for worker in (self.specs_worker, self.update_checker, self.access_checker,
+                       self.update_downloader, self.manual_checker):
+            try:
+                if worker is not None and worker.isRunning():
+                    worker.wait(6000)
             except Exception:
                 pass
         super().closeEvent(event)
